@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Streamlit roda este arquivo como script: a raiz do projeto precisa estar no path.
 _ROOT = Path(__file__).resolve().parent.parent
@@ -14,14 +16,11 @@ if str(_ROOT) not in sys.path:
 import streamlit as st
 
 from calculadora.core import BaseMethod, ValuationResult, YearCriterion, calculate
-from calculadora.storage import excluir_acao, listar_acoes, salvar_acao
+from calculadora.empresa import EmpresaInfo, fetch_empresa
+from calculadora.preco import fetch_preco
+from calculadora.proventos_fetch import fetch_proventos
+from calculadora.storage import excluir_acao, listar_acoes, obter_acao, salvar_acao
 from calculadora.tab_bar import browser_tabs
-
-try:
-    from calculadora.okanebox import fetch_quote
-except ImportError:  # pragma: no cover
-    fetch_quote = None  # type: ignore
-
 
 st.set_page_config(page_title="Preço teto por proventos", layout="wide")
 
@@ -45,10 +44,137 @@ def _default_acao() -> dict:
 def _init_state() -> None:
     if "acoes" not in st.session_state:
         st.session_state.acoes = [_default_acao()]
-    if "okanebox_token" not in st.session_state:
-        st.session_state.okanebox_token = ""
     if "active_tab" not in st.session_state:
         st.session_state.active_tab = 0
+    if "auto_preco_ligado" not in st.session_state:
+        st.session_state.auto_preco_ligado = False
+    if "auto_preco_intervalo" not in st.session_state:
+        st.session_state.auto_preco_intervalo = 30
+    if "empresa_cache" not in st.session_state:
+        st.session_state.empresa_cache = {}
+
+
+def _obter_empresa(ticker: str) -> EmpresaInfo | None:
+    """Busca (com cache de sessão) o perfil da empresa para o ticker."""
+    t = str(ticker or "").strip().upper().removesuffix(".SA")
+    if not t:
+        return None
+    cache: dict = st.session_state.setdefault("empresa_cache", {})
+    if t in cache:
+        return cache[t]
+    try:
+        info = fetch_empresa(t)
+    except Exception:  # noqa: BLE001
+        info = None
+    cache[t] = info
+    return info
+
+
+def _on_ticker_change(tab_i: int) -> None:
+    """Dispara busca de descrição (e proventos, se o campo estiver vazio)."""
+    ticker = str(st.session_state.get(f"ticker_{tab_i}", "") or "").strip().upper()
+    if not ticker:
+        return
+    # Invalida só este ticker se o usuário reescrever o mesmo campo
+    cache: dict = st.session_state.setdefault("empresa_cache", {})
+    # Se já temos cache ok, reaproveita; se era None (falha), tenta de novo
+    if ticker not in cache or cache[ticker] is None:
+        cache.pop(ticker, None)
+        _obter_empresa(ticker)
+
+    prov_atual = str(st.session_state.get(f"proventos_{tab_i}", "") or "").strip()
+    if prov_atual or ticker == "EXEMPLO":
+        return
+    try:
+        got = fetch_proventos(ticker)
+    except Exception as exc:  # noqa: BLE001
+        st.session_state[f"proventos_msg_{tab_i}"] = f"Proventos: falha automática ({exc})"
+        return
+    # text_area ainda não foi criado neste run — pode setar direto
+    st.session_state[f"proventos_{tab_i}"] = got.texto
+    st.session_state[f"proventos_msg_{tab_i}"] = (
+        f"{got.quantidade} provento(s) via {got.fonte}"
+    )
+    if got.avisos:
+        st.session_state[f"proventos_avisos_{tab_i}"] = got.avisos[:8]
+
+
+def _render_empresa(info: EmpresaInfo | None, *, ticker: str) -> None:
+    if not ticker.strip():
+        return
+    if info is None:
+        st.caption("Não encontrei descrição automática para este ticker.")
+        return
+    st.markdown(f"**{info.resumo}**")
+    if info.descricao:
+        st.caption(info.descricao)
+    st.caption(f"Fonte: {info.fonte}")
+
+
+def _atualizar_precos_abertas() -> tuple[int, list[str]]:
+    """Atualiza o preço de todas as abas com ticker válido. Devolve (ok, erros)."""
+    ok = 0
+    erros: list[str] = []
+    for i, acao in enumerate(st.session_state.acoes):
+        ticker = str(
+            st.session_state.get(f"ticker_{i}", acao.get("ticker", "")) or ""
+        ).strip().upper()
+        if not ticker or ticker == "EXEMPLO":
+            continue
+        try:
+            cot = fetch_preco(ticker)
+            st.session_state.acoes[i]["preco"] = float(cot.preco)
+            st.session_state.acoes[i]["ticker"] = ticker
+            ok += 1
+        except Exception as exc:  # noqa: BLE001
+            erros.append(f"{ticker}: {exc}")
+    return ok, erros
+
+
+def _rodar_auto_precos() -> None:
+    """
+    Fragmento que, com a opção ligada, busca preços periodicamente
+    e recarrega a tela para recalcular o teto.
+    """
+    ligado = bool(st.session_state.get("auto_preco_ligado"))
+    intervalo = int(st.session_state.get("auto_preco_intervalo", 30))
+    run_every = timedelta(seconds=intervalo) if ligado else None
+
+    @st.fragment(run_every=run_every)
+    def _tick() -> None:
+        if not st.session_state.get("auto_preco_ligado"):
+            return
+
+        agora = time.time()
+        intervalo_local = int(st.session_state.get("auto_preco_intervalo", 30))
+        ultimo = float(st.session_state.get("_last_auto_fetch", 0) or 0)
+        # Evita loop infinito: após st.rerun() o fragment remonta na hora
+        if agora - ultimo < max(5.0, intervalo_local * 0.5):
+            status = st.session_state.get("auto_preco_status")
+            if status:
+                st.caption(status)
+            return
+
+        st.session_state._last_auto_fetch = agora
+        n_ok, erros = _atualizar_precos_abertas()
+        horario = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M:%S")
+        if n_ok == 0 and not erros:
+            st.session_state.auto_preco_status = (
+                f"Auto-preço: nenhuma aba com ticker válido ({horario})"
+            )
+            st.caption(st.session_state.auto_preco_status)
+            return
+
+        for i, acao in enumerate(st.session_state.acoes):
+            _queue_update(f"preco_{i}", float(acao.get("preco") or 0.0))
+
+        status = f"Auto-preço: {n_ok} atualizada(s) às {horario}"
+        if erros:
+            status += f" | falhas: {'; '.join(erros[:3])}"
+        st.session_state.auto_preco_status = status
+        st.rerun()
+
+    _tick()
 
 
 def _inject_tab_css() -> None:
@@ -226,8 +352,10 @@ def _clear_acao_widgets(n: int) -> None:
             "dy_",
             "proventos_",
             "salvar_",
-            "okanebox_",
+            "buscar_prov_",
             "exemplo_",
+            "proventos_msg_",
+            "proventos_avisos_",
         ):
             st.session_state.pop(f"{prefix}{i}", None)
 
@@ -400,37 +528,54 @@ def main() -> None:
     with st.sidebar:
         st.header("Ações salvas")
         if salvas:
-            st.caption("Clique para abrir. ✕ exclui.")
-            for acao in salvas:
-                c_ticker, c_del = st.columns([5, 1])
-                with c_ticker:
-                    if st.button(
-                        acao.ticker,
-                        key=f"open_saved_{acao.ticker}",
-                        use_container_width=True,
-                    ):
-                        _load_acoes_into_tabs(
-                            [
-                                {
-                                    "ticker": acao.ticker,
-                                    "preco": acao.preco,
-                                    "dy": acao.dy,
-                                    "proventos": acao.proventos,
-                                }
-                            ],
-                            replace=False,
-                        )
+            tickers = [a.ticker for a in salvas]
+
+            def _abrir_salva_callback() -> None:
+                ticker = st.session_state.get("sidebar_abrir_ticker")
+                if not ticker:
+                    return
+                acao = obter_acao(ticker)
+                if not acao:
+                    return
+                _load_acoes_into_tabs(
+                    [
+                        {
+                            "ticker": acao.ticker,
+                            "preco": acao.preco,
+                            "dy": acao.dy,
+                            "proventos": acao.proventos,
+                        }
+                    ],
+                    replace=False,
+                )
+                # on_change roda antes dos widgets da aba; aplica já nesta execução
+                _apply_pending_updates()
+
+            st.selectbox(
+                "Abrir",
+                options=tickers,
+                index=None,
+                placeholder="Escolha uma ação…",
+                key="sidebar_abrir_ticker",
+                on_change=_abrir_salva_callback,
+                help="Selecione para abrir na calculadora.",
+            )
+            st.caption(f"{len(salvas)} salva(s)")
+
+            with st.expander("Excluir salva", expanded=False):
+                st.selectbox(
+                    "Ticker",
+                    options=tickers,
+                    key="sidebar_excluir_ticker",
+                    label_visibility="collapsed",
+                )
+                if st.button("Excluir selecionada", use_container_width=True):
+                    alvo = st.session_state.get("sidebar_excluir_ticker")
+                    if alvo and excluir_acao(alvo):
+                        # Limpa seleção de abrir se era a mesma
+                        if st.session_state.get("sidebar_abrir_ticker") == alvo:
+                            st.session_state.sidebar_abrir_ticker = None
                         st.rerun()
-                with c_del:
-                    if st.button(
-                        "✕",
-                        key=f"del_saved_{acao.ticker}",
-                        use_container_width=True,
-                        help=f"Excluir {acao.ticker}",
-                    ):
-                        if excluir_acao(acao.ticker):
-                            st.rerun()
-            st.caption(f"{len(salvas)} salva(s) em data/acoes.db")
         else:
             st.caption("Nenhuma ação salva ainda. Use **Salvar / atualizar** na aba.")
 
@@ -499,17 +644,36 @@ def main() -> None:
         )
 
         st.divider()
-        st.subheader("OkaneBox (opcional)")
-        st.caption(
-            "Proventos exigem plano premium. Use o mesmo e-mail da compra "
-            "(header Authorization: Bearer e-mail)."
+        st.subheader("Preço ao vivo")
+        st.checkbox(
+            "Atualizar preços automaticamente",
+            key="auto_preco_ligado",
+            help="Busca a cotação de todas as abas abertas no intervalo escolhido.",
         )
-        st.text_input(
-            "E-mail / token OkaneBox",
-            key="okanebox_token",
-            type="password",
-            help="E-mail do plano premium. Pode ficar vazio se for colar os proventos.",
+        st.selectbox(
+            "Intervalo",
+            options=[15, 30, 60, 120],
+            format_func=lambda s: f"{s} segundos",
+            key="auto_preco_intervalo",
+            disabled=not st.session_state.get("auto_preco_ligado"),
         )
+        if st.session_state.get("auto_preco_ligado"):
+            status = st.session_state.get("auto_preco_status")
+            if status:
+                st.caption(status)
+            else:
+                st.caption("Aguardando primeira atualização…")
+            if st.button("Atualizar todas agora", use_container_width=True):
+                st.session_state._last_auto_fetch = 0
+                n_ok, erros = _atualizar_precos_abertas()
+                for j, acao in enumerate(st.session_state.acoes):
+                    _queue_update(f"preco_{j}", float(acao.get("preco") or 0.0))
+                horario = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M:%S")
+                msg = f"Auto-preço: {n_ok} atualizada(s) às {horario}"
+                if erros:
+                    msg += f" | falhas: {'; '.join(erros[:3])}"
+                st.session_state.auto_preco_status = msg
+                st.rerun()
 
         st.divider()
         if st.button("+ Nova aba vazia"):
@@ -535,7 +699,13 @@ def main() -> None:
         st.session_state.active_tab = 0
 
     col_a, col_b, col_c = st.columns(3)
-    col_a.text_input("Ticker", key=f"ticker_{i}", placeholder="Ex.: ITUB4")
+    col_a.text_input(
+        "Ticker",
+        key=f"ticker_{i}",
+        placeholder="Ex.: ITUB4",
+        on_change=_on_ticker_change,
+        args=(i,),
+    )
     col_b.number_input(
         "Preço atual (R$)",
         min_value=0.0,
@@ -551,7 +721,18 @@ def main() -> None:
         key=f"dy_{i}",
     )
 
-    b1, b2, b3 = st.columns(3)
+    ticker_atual = str(st.session_state.get(f"ticker_{i}", "") or "").strip()
+    if ticker_atual:
+        chave = ticker_atual.upper().removesuffix(".SA")
+        cache = st.session_state.setdefault("empresa_cache", {})
+        if chave not in cache:
+            with st.spinner("Buscando descrição da empresa…"):
+                empresa = _obter_empresa(ticker_atual)
+        else:
+            empresa = _obter_empresa(ticker_atual)
+        _render_empresa(empresa, ticker=ticker_atual)
+
+    b1, b2, b3, b4 = st.columns(4)
     with b1:
         if st.button("Salvar / atualizar", key=f"salvar_{i}", type="primary"):
             ticker = str(st.session_state.get(f"ticker_{i}", "")).strip()
@@ -574,32 +755,50 @@ def main() -> None:
                 st.error(str(exc))
 
     with b2:
-        if st.button("Buscar OkaneBox", key=f"okanebox_{i}"):
+        if st.button("Atualizar preço", key=f"preco_live_{i}"):
             ticker = str(st.session_state.get(f"ticker_{i}", "")).strip()
-            if fetch_quote is None:
-                st.error("httpx não instalado.")
-            elif not ticker:
-                st.error("Informe o ticker antes de buscar.")
+            if not ticker:
+                st.error("Informe o ticker antes de atualizar o preço.")
             else:
                 try:
-                    with st.spinner("Consultando OkaneBox..."):
-                        quote = fetch_quote(
-                            ticker,
-                            token=st.session_state.get("okanebox_token") or None,
-                        )
-                    if quote.preco is not None:
-                        _queue_update(f"preco_{i}", float(quote.preco))
-                    if quote.texto_proventos:
-                        _queue_update(f"proventos_{i}", quote.texto_proventos)
-                    avisos = quote.avisos[:8]
-                    if len(quote.avisos) > 8:
-                        avisos.append(f"... e mais {len(quote.avisos) - 8} avisos.")
-                    st.session_state[f"okanebox_avisos_{i}"] = avisos
+                    with st.spinner("Buscando cotação..."):
+                        cot = fetch_preco(ticker)
+                    _queue_update(f"preco_{i}", float(cot.preco))
+                    quando = (
+                        cot.horario.strftime("%d/%m/%Y %H:%M")
+                        if cot.horario
+                        else "agora"
+                    )
+                    st.session_state[f"preco_msg_{i}"] = (
+                        f"Preço {cot.ticker}: R$ {cot.preco:.4f} "
+                        f"({cot.fonte}, {quando} BRT)"
+                    )
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Falha na OkaneBox: {exc}")
+                    st.error(f"Falha ao buscar preço: {exc}")
 
     with b3:
+        if st.button("Buscar proventos", key=f"buscar_prov_{i}"):
+            ticker = str(st.session_state.get(f"ticker_{i}", "")).strip()
+            if not ticker:
+                st.error("Informe o ticker antes de buscar os proventos.")
+            else:
+                try:
+                    with st.spinner("Buscando proventos..."):
+                        got = fetch_proventos(ticker)
+                    _queue_update(f"proventos_{i}", got.texto)
+                    st.session_state[f"proventos_msg_{i}"] = (
+                        f"{got.quantidade} provento(s) via {got.fonte}"
+                    )
+                    avisos = got.avisos[:8]
+                    if len(got.avisos) > 8:
+                        avisos.append(f"... e mais {len(got.avisos) - 8} avisos.")
+                    st.session_state[f"proventos_avisos_{i}"] = avisos
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Falha ao buscar proventos: {exc}")
+
+    with b4:
         if st.button("Colar exemplo", key=f"exemplo_{i}"):
             _queue_update(f"proventos_{i}", EXEMPLO)
             if not str(st.session_state.get(f"ticker_{i}", "")).strip():
@@ -612,6 +811,14 @@ def main() -> None:
     if msg:
         st.success(msg)
 
+    preco_msg = st.session_state.pop(f"preco_msg_{i}", None)
+    if preco_msg:
+        st.caption(preco_msg)
+
+    prov_msg = st.session_state.pop(f"proventos_msg_{i}", None)
+    if prov_msg:
+        st.caption(prov_msg)
+
     st.text_area(
         "Proventos (Tipo, Data-com, Data pagamento, Valor — tab ou ;)",
         height=220,
@@ -619,7 +826,7 @@ def main() -> None:
         placeholder=EXEMPLO.splitlines()[0],
     )
 
-    for aviso in st.session_state.pop(f"okanebox_avisos_{i}", []) or []:
+    for aviso in st.session_state.pop(f"proventos_avisos_{i}", []) or []:
         st.warning(aviso)
 
     # Sincroniza todas as abas (ativa via widgets; demais via estado)
@@ -677,6 +884,8 @@ def main() -> None:
         st.caption(
             "% vs teto negativo = barata (abaixo do teto). Ordenado da mais barata para a mais cara."
         )
+
+    _rodar_auto_precos()
 
 
 if __name__ == "__main__":

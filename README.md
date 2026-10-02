@@ -30,14 +30,15 @@ Abre no navegador (em geral `http://localhost:8501`).
 ## Como usar
 
 1. Na barra lateral, escolha:
-   - **Anos:** últimos N anos fechados (ex.: 3 ou 5) **ou** anos específicos (ex.: `2021,2023,2024`).
-   - **Método:** média, mediana ou menor ano (pessimista).
-   - **Critério do ano:** data-com (padrão) ou data de pagamento.
-   - Se o ano em andamento deve entrar no cálculo (desligado por padrão).
+  - **Anos:** últimos N anos fechados (ex.: 3 ou 5) **ou** anos específicos (ex.: `2021,2023,2024`).
+  - **Método:** média, mediana ou menor ano (pessimista).
+  - **Critério do ano:** data-com (padrão) ou data de pagamento.
+  - Se o ano em andamento deve entrar no cálculo (desligado por padrão).
 2. Em cada aba de ação: ticker, preço atual, DY desejado (%) e cole os proventos.
-3. Clique em **Salvar / atualizar** para gravar no SQLite local (`data/acoes.db`). Na próxima vez, a ação aparece em **Ações salvas** na barra lateral — clique no ticker para abrir.
-4. Para atualizar: abra a ação, edite preço/proventos/DY e salve de novo (mesmo ticker sobrescreve).
-5. O resultado aparece na hora. Com 2+ abas, há uma tabela comparativa.
+3. Clique em **Salvar / atualizar** para gravar no SQLite local (`data/acoes.db`). Na próxima vez, a ação aparece no seletor **Abrir** da barra lateral.
+4. **Atualizar preço** busca a cotação quase em tempo real (Yahoo Finance / B3). Em pregão o atraso costuma ser baixo; fora do horário, mostra o último negócio.
+5. Para atualizar proventos: edite o texto e salve de novo (mesmo ticker sobrescreve).
+6. O resultado aparece na hora. Com 2+ abas, há uma tabela comparativa.
 
 ### Formato dos proventos
 
@@ -57,15 +58,15 @@ Há um botão **Colar exemplo** na tela com dados de demonstração.
 ## Regras de cálculo
 
 1. **IR:**
-   - Dividendo: isento
-   - JCP (pela data-com): 15% até 2025 / 17,5% a partir de 2026
-   - Rend. Tributado: 15% por padrão (em `config.toml`; FIIs costumam ser 20% — force na 5ª coluna)
+  - Dividendo: isento
+  - JCP (pela data-com): 15% até 2025 / 17,5% a partir de 2026
+  - Rend. Tributado: 15% por padrão (em `config.toml`; FIIs costumam ser 20% — force na 5ª coluna)
 2. Ano em andamento fica **fora** da média (salvo se você marcar a opção).
-3. `base` = média / mediana / mínimo do líquido nos anos escolhidos  
-   `preço teto = base ÷ DY desejado`  
+3. `base` = média / mediana / mínimo do líquido nos anos escolhidos
+  `preço teto = base ÷ DY desejado`  
    `% vs teto = preço atual ÷ preço teto − 1` (negativo = barata)
 
-As alíquotas ficam em [`config.toml`](config.toml).
+As alíquotas ficam em `[config.toml](config.toml)`.
 
 ## OkaneBox (opcional)
 
@@ -81,3 +82,10 @@ Documentação: [API de proventos](https://www.okanebox.com.br/como-usar/api-div
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
 ```
+
+=======
+
+# Financeiro
+
+> > > > > > > 494a59daa4e5394f077489011dabc0aa54c2bee8
+
