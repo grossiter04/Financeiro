@@ -1,0 +1,19 @@
+# Alíquotas de IR sobre JCP por vigência (data-com / crédito).
+# A alíquota aplicada é a da faixa cujo "desde" é o mais recente
+# que ainda é <= data de referência.
+
+[[aliquotas_jcp]]
+desde = "1900-01-01"
+aliquota = 0.15
+
+[[aliquotas_jcp]]
+desde = "2026-01-01"
+aliquota = 0.175
+
+# Dividendos: isentos (0).
+aliquota_dividendo = 0.0
+
+# Rendimento tributado (ex.: "Rend. Tributado").
+# Em muitos casos usa 15%; FIIs não isentos costumam usar 20%.
+# Dá para forçar por linha com a 5ª coluna (ex.: 20).
+aliquota_rendimento_tributado = 0.15

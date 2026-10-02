@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        color: inherit;
+      }
+      .bar {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        padding: 0 2px;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.35);
+        min-height: 30px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      .tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        max-width: 140px;
+        height: 26px;
+        padding: 0 2px 0 10px;
+        border: 1px solid transparent;
+        border-bottom: none;
+        border-radius: 7px 7px 0 0;
+        background: transparent;
+        color: inherit;
+        opacity: 0.7;
+        cursor: default;
+        user-select: none;
+        flex: 0 0 auto;
+      }
+      .tab:hover {
+        opacity: 1;
+        background: rgba(127, 127, 127, 0.14);
+      }
+      .tab.active {
+        opacity: 1;
+        background: rgba(127, 127, 127, 0.2);
+        border-color: rgba(128, 128, 128, 0.4);
+      }
+      .title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12.5px;
+        line-height: 1;
+        padding-right: 2px;
+        cursor: pointer;
+      }
+      .close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        margin-right: 2px;
+        border-radius: 3px;
+        font-size: 13px;
+        line-height: 1;
+        opacity: 0;
+        flex: 0 0 auto;
+        cursor: pointer;
+      }
+      .tab:hover .close {
+        opacity: 0.65;
+      }
+      .close:hover {
+        opacity: 1 !important;
+        background: rgba(185, 28, 28, 0.22);
+        color: #f87171;
+      }
+      .tab.solo .close {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar" id="bar"></div>
+    <script>
+      // Bridge mínimo do protocolo de componentes do Streamlit
+      const Streamlit = {
+        RENDER_EVENT: "streamlit:render",
+        setComponentReady() {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:componentReady",
+              apiVersion: 1,
+            },
+            "*"
+          );
+        },
+        setFrameHeight(height) {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setFrameHeight",
+              height,
+            },
+            "*"
+          );
+        },
+        setComponentValue(value) {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setComponentValue",
+              value,
+            },
+            "*"
+          );
+        },
+      };
+
+      function send(action, index) {
+        Streamlit.setComponentValue({
+          action,
+          index,
+          id: Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+        });
+      }
+
+      function render(labels, active) {
+        const bar = document.getElementById("bar");
+        bar.innerHTML = "";
+        const solo = labels.length <= 1;
+        labels.forEach((label, i) => {
+          const tab = document.createElement("div");
+          tab.className =
+            "tab" + (i === active ? " active" : "") + (solo ? " solo" : "");
+          tab.title = label;
+
+          const title = document.createElement("span");
+          title.className = "title";
+          title.textContent = label;
+          title.addEventListener("click", () => send("select", i));
+          tab.appendChild(title);
+
+          const close = document.createElement("span");
+          close.className = "close";
+          close.textContent = "×";
+          close.title = "Fechar";
+          close.addEventListener("click", (e) => {
+            e.stopPropagation();
+            send("close", i);
+          });
+          tab.appendChild(close);
+          bar.appendChild(tab);
+        });
+        Streamlit.setFrameHeight(Math.max(32, bar.scrollHeight + 2));
+      }
+
+      window.addEventListener("message", (event) => {
+        const data = event.data;
+        if (!data || data.type !== "streamlit:render") return;
+        if (data.theme && data.theme.textColor) {
+          document.body.style.color = data.theme.textColor;
+        }
+        const args = data.args || {};
+        render(args.labels || ["Ação 1"], Number(args.active) || 0);
+      });
+
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(32);
+    </script>
+  </body>
+</html>

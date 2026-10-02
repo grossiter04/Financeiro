@@ -1,0 +1,18 @@
+# Dependências locais / ambiente
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.env
+*.egg-info/
+dist/
+build/
+.streamlit/secrets.toml
+
+# SQLite temporário; o banco principal (data/acoes.db) sobe de propósito
+*.db-wal
+*.db-shm
+data/*
+!data/acoes.db
