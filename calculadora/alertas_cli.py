@@ -1,11 +1,15 @@
-"""CLI: python -m calculadora.alertas_cli [--dry-run]."""
+"""CLI: python -m calculadora.alertas_cli [--dry-run|--test-email]."""
 
 from __future__ import annotations
 
 import argparse
 import sys
 
-from calculadora.alertas import checar_e_avisar
+from calculadora.alertas import (
+    _smtp_config_from_env,
+    checar_e_avisar,
+    enviar_email,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,7 +19,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Só imprime; não envia aviso",
     )
+    parser.add_argument(
+        "--test-email",
+        action="store_true",
+        help="Envia um e-mail de teste (valida SMTP) e sai",
+    )
     args = parser.parse_args(argv)
+
+    if args.test_email:
+        smtp = _smtp_config_from_env()
+        if smtp is None:
+            print(
+                "SMTP incompleto. Defina SMTP_HOST, SMTP_USER, SMTP_PASSWORD, ALERT_EMAIL_TO.",
+                file=sys.stderr,
+            )
+            return 1
+        enviar_email(
+            "Teste do vigilante Financeiro.\nSe você recebeu isto, o SMTP está ok.",
+            host=str(smtp["host"]),
+            port=int(smtp["port"]),
+            user=str(smtp["user"]),
+            password=str(smtp["password"]),
+            para=str(smtp["para"]),
+            de=str(smtp["de"]),
+            assunto="Teste: alertas Financeiro",
+        )
+        print(f"E-mail de teste enviado para {smtp['para']}")
+        return 0
 
     result = checar_e_avisar(dry_run=args.dry_run)
     for e in result.erros:
@@ -26,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if result.enviados:
         print("Enviados:", ", ".join(result.enviados))
+    elif result.sinais and not args.dry_run:
+        print("Houve sinais, mas o envio falhou — veja AVISO acima.", file=sys.stderr)
+    elif not result.sinais:
+        print("Nenhuma ação barata agora — por isso não há e-mail.")
     return 0
 
 

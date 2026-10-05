@@ -28,7 +28,7 @@ from calculadora.core import (
 from calculadora.fundamentos import fetch_fundamentos
 from calculadora.preco import fetch_preco
 from calculadora.proventos_fetch import fetch_proventos
-from calculadora.storage import listar_acoes, resolve_db_path
+from calculadora.storage import listar_acoes, obter_acao, resolve_db_path
 
 _ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WATCHLIST = _ROOT / "alertas" / "watchlist.toml"
@@ -139,6 +139,19 @@ def _chave(sinal: Sinal) -> str:
     return f"{sinal.ticker}|{sinal.criterio}"
 
 
+def _texto_proventos(ticker: str, *, timeout: float) -> tuple[str, str]:
+    """
+    Prefere proventos já salvos no SQLite (funciona no GitHub Actions,
+    onde Status Invest costuma bloquear). Senão busca na rede.
+    Retorna (texto, fonte).
+    """
+    salva = obter_acao(ticker)
+    if salva is not None and salva.proventos.strip():
+        return salva.proventos, "banco local"
+    got = fetch_proventos(ticker, timeout=timeout)
+    return got.texto, got.fonte
+
+
 def avaliar_item(item: WatchItem, *, timeout: float = 25.0) -> tuple[list[Sinal], list[str]]:
     sinais: list[Sinal] = []
     erros: list[str] = []
@@ -166,9 +179,9 @@ def avaliar_item(item: WatchItem, *, timeout: float = 25.0) -> tuple[list[Sinal]
     base = None
     if item.avisar_bazin or item.avisar_dy:
         try:
-            got = fetch_proventos(ticker, timeout=timeout)
+            texto, _fonte = _texto_proventos(ticker, timeout=timeout)
             result = calculate(
-                got.texto,
+                texto,
                 preco_atual=preco,
                 dy_desejado=item.dy_desejado / 100.0,
                 ticker=ticker,

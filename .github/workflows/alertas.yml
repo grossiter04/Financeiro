@@ -5,6 +5,11 @@ on:
     # A cada 20 min no pregão (lista grande ~30 tickers)
     - cron: "*/20 13-20 * * 1-5"
   workflow_dispatch:
+    inputs:
+      test_email:
+        description: "Enviar e-mail de teste (valida SMTP)"
+        type: boolean
+        default: false
 
 concurrency:
   group: alertas-preco
@@ -44,6 +49,17 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m calculadora.alertas_cli
+
+      - name: E-mail de teste (só se TEST_EMAIL=1)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email == true }}
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        run: python -m calculadora.alertas_cli --test-email
 
       - name: Salvar state
         if: always()
