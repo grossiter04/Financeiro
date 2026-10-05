@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "acoes.db"
+_LOCAL_DEFAULT = Path(__file__).resolve().parent.parent / "data" / "acoes.db"
+
+
+def resolve_db_path(db_path: Path | None = None) -> Path:
+    """
+    Resolve o caminho do SQLite.
+    Ordem: argumento explícito → DB_PATH → DATA_DIR/acoes.db → data/ local.
+    No Railway, monte o volume em /app/data e defina DATA_DIR=/app/data.
+    """
+    if db_path is not None:
+        return Path(db_path)
+    explicit = (os.environ.get("DB_PATH") or "").strip()
+    if explicit:
+        return Path(explicit)
+    data_dir = (os.environ.get("DATA_DIR") or "").strip()
+    if data_dir:
+        return Path(data_dir) / "acoes.db"
+    return _LOCAL_DEFAULT
+
+
+# Compat: caminho padrão sem variáveis de ambiente
+DEFAULT_DB_PATH = _LOCAL_DEFAULT
 
 
 @dataclass
@@ -39,7 +61,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 def listar_acoes(db_path: Path | None = None) -> list[AcaoSalva]:
-    path = db_path or DEFAULT_DB_PATH
+    path = resolve_db_path(db_path)
     with _connect(path) as conn:
         rows = conn.execute(
             "SELECT ticker, preco, dy, proventos, updated_at "
@@ -62,7 +84,7 @@ def listar_tickers(db_path: Path | None = None) -> list[str]:
 
 
 def obter_acao(ticker: str, db_path: Path | None = None) -> AcaoSalva | None:
-    path = db_path or DEFAULT_DB_PATH
+    path = resolve_db_path(db_path)
     ticker = ticker.strip().upper()
     if not ticker:
         return None
@@ -90,7 +112,7 @@ def salvar_acao(
     proventos: str,
     db_path: Path | None = None,
 ) -> AcaoSalva:
-    path = db_path or DEFAULT_DB_PATH
+    path = resolve_db_path(db_path)
     ticker = ticker.strip().upper()
     if not ticker:
         raise ValueError("Informe o ticker antes de salvar.")
@@ -125,7 +147,7 @@ def salvar_acao(
 
 
 def excluir_acao(ticker: str, db_path: Path | None = None) -> bool:
-    path = db_path or DEFAULT_DB_PATH
+    path = resolve_db_path(db_path)
     ticker = ticker.strip().upper()
     if not ticker:
         return False

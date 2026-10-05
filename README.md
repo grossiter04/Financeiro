@@ -25,27 +25,25 @@ streamlit run calculadora/app.py
 
 Abre no navegador (em geral `http://localhost:8501`).
 
-## Deploy (Streamlit Community Cloud)
+## Deploy (Railway — dados persistentes)
 
-O caminho mais simples para acessar de fora:
+O Streamlit Community Cloud **não** guarda o SQLite com segurança (disco efêmero). Use o **Railway** com volume:
 
-1. Abra [share.streamlit.io](https://share.streamlit.io) e entre com a conta GitHub (`grossiter04`).
-2. Autorize o Streamlit a ler repositórios **privados** (o repo `Financeiro` é privado).
-3. **Create app** → **Yup, I have an app**.
-4. Preencha:
-   - **Repository:** `grossiter04/Financeiro`
-   - **Branch:** `main`
-   - **Main file path:** `calculadora/app.py`
-   - **Python version** (Advanced): `3.12`
-5. Clique em **Deploy**.
+1. Conta em [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub** → `grossiter04/Financeiro` (branch `main`).
+2. O serviço sobe via `Dockerfile` + `railway.toml`.
+3. No serviço, adicione um **Volume** com mount path **`/app/data`**.
+4. Variáveis (Settings → Variables):
+   - `DATA_DIR=/app/data` (já é o default da imagem; confirme se quiser)
+5. **Settings → Networking → Generate Domain** para obter a URL pública.
+6. Teste: salve uma ação → **Restart** o serviço → confira se a ação ainda aparece em **Abrir**.
 
-A URL fica em `https://….streamlit.app`. Cada `git push` na `main` atualiza o app.
+Cada `git push` na `main` redeploya. O volume `/app/data` **não** é apagado no restart.
 
-### Limitações no Cloud (importante)
+Pode apagar o app antigo em `*.streamlit.app` no [share.streamlit.io](https://share.streamlit.io) — ele não é mais necessário.
 
-- O SQLite (`data/acoes.db`) **não é permanente**: o disco pode ser recriado quando o app hiberna ou reinicia. Ações salvas podem sumir.
-- O plano gratuito **hiberna** após inatividade; a primeira abertura depois disso demora um pouco.
-- Alertas WhatsApp/e-mail **ainda não** rodam no Cloud só com o Streamlit — isso precisa de um worker agendado (próximo passo).
+### Alertas (próximo passo)
+
+Com o SQLite no volume, dá para rodar depois um worker/cron no mesmo projeto Railway para avisar por e-mail/WhatsApp quando o preço cruzar Bazin/Graham/teto.
 
 ## Como usar
 

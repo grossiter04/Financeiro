@@ -6,12 +6,36 @@ from pathlib import Path
 
 import pytest
 
-from calculadora.storage import excluir_acao, listar_acoes, obter_acao, salvar_acao
+from calculadora.storage import (
+    excluir_acao,
+    listar_acoes,
+    obter_acao,
+    resolve_db_path,
+    salvar_acao,
+)
 
 
 @pytest.fixture()
 def db(tmp_path: Path) -> Path:
     return tmp_path / "acoes.db"
+
+
+def test_resolve_db_path_explicit(tmp_path: Path):
+    alvo = tmp_path / "x.db"
+    assert resolve_db_path(alvo) == alvo
+
+
+def test_resolve_db_path_env_db_path(monkeypatch, tmp_path: Path):
+    alvo = tmp_path / "custom.db"
+    monkeypatch.setenv("DB_PATH", str(alvo))
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    assert resolve_db_path() == alvo
+
+
+def test_resolve_db_path_env_data_dir(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("DB_PATH", raising=False)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert resolve_db_path() == tmp_path / "acoes.db"
 
 
 def test_salvar_e_obter(db: Path):
