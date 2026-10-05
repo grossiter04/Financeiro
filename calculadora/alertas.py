@@ -1,10 +1,13 @@
-"""Vigilante de preço: Bazin / Graham / DY / preço manual → Telegram."""
+"""Vigilante de preço: Bazin / Graham / DY / preço manual → e-mail (ou Telegram)."""
 
 from __future__ import annotations
 
 import json
 import os
+import smtplib
+import ssl
 from dataclasses import dataclass, field
+from email.message import EmailMessage
 from pathlib import Path
 
 import httpx
@@ -224,20 +227,47 @@ def avaliar_item(item: WatchItem, *, timeout: float = 25.0) -> tuple[list[Sinal]
     return sinais, erros
 
 
-def formatar_mensagem(sinais: list[Sinal]) -> str:
-    linhas = ["🔔 Oportunidade de compra", ""]
+def formatar_mensagem(sinais: list[Sinal], *, markdown: bool = False) -> str:
+    linhas = ["Oportunidade de compra", ""]
     por_ticker: dict[str, list[Sinal]] = {}
     for s in sinais:
         por_ticker.setdefault(s.ticker, []).append(s)
     for ticker, lista in sorted(por_ticker.items()):
-        linhas.append(f"*{ticker}* — R$ {lista[0].preco:.4f}")
+        titulo = f"*{ticker}*" if markdown else ticker
+        linhas.append(f"{titulo} — R$ {lista[0].preco:.4f}")
         for s in lista:
             linhas.append(
-                f"  • {s.criterio.upper()}: {s.pct * 100:.1f}% vs teto "
+                f"  - {s.criterio.upper()}: {s.pct * 100:.1f}% vs teto "
                 f"R$ {s.teto:.4f} ({s.detalhe})"
             )
         linhas.append("")
     return "\n".join(linhas).strip()
+
+
+def enviar_email(
+    texto: str,
+    *,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    para: str,
+    de: str | None = None,
+    assunto: str = "Alerta: ação barata",
+) -> None:
+    msg = EmailMessage()
+    msg["Subject"] = assunto
+    msg["From"] = de or user
+    msg["To"] = para
+    msg.set_content(texto)
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.ehlo()
+        smtp.starttls(context=context)
+        smtp.ehlo()
+        smtp.login(user, password)
+        smtp.send_message(msg)
 
 
 def enviar_telegram(texto: str, *, token: str, chat_id: str, timeout: float = 20.0) -> None:
@@ -256,6 +286,66 @@ def enviar_telegram(texto: str, *, token: str, chat_id: str, timeout: float = 20
         payload = resp.json()
         if not payload.get("ok"):
             raise ValueError(f"Telegram: {payload}")
+
+
+def _smtp_config_from_env() -> dict[str, str | int] | None:
+    host = os.environ.get("SMTP_HOST", "").strip()
+    user = os.environ.get("SMTP_USER", "").strip()
+    password = os.environ.get("SMTP_PASSWORD", "").strip()
+    para = os.environ.get("ALERT_EMAIL_TO", "").strip() or user
+    if not (host and user and password and para):
+        return None
+    port_raw = (os.environ.get("SMTP_PORT") or "587").strip()
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 587
+    return {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "para": para,
+        "de": (os.environ.get("SMTP_FROM") or user).strip(),
+    }
+
+
+def disparar_avisos(sinais: list[Sinal]) -> list[str]:
+    """
+    Envia por e-mail se SMTP estiver configurado; senão tenta Telegram.
+    Retorna lista de canais usados (ex.: ['email']).
+    """
+    canais: list[str] = []
+    smtp = _smtp_config_from_env()
+    if smtp:
+        enviar_email(
+            formatar_mensagem(sinais, markdown=False),
+            host=str(smtp["host"]),
+            port=int(smtp["port"]),
+            user=str(smtp["user"]),
+            password=str(smtp["password"]),
+            para=str(smtp["para"]),
+            de=str(smtp["de"]),
+            assunto=f"Alerta: {', '.join(sorted({s.ticker for s in sinais}))}",
+        )
+        canais.append("email")
+        return canais
+
+    tok = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    cid = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if tok and cid:
+        enviar_telegram(
+            formatar_mensagem(sinais, markdown=True),
+            token=tok,
+            chat_id=cid,
+        )
+        canais.append("telegram")
+        return canais
+
+    raise ValueError(
+        "Configure e-mail (SMTP_HOST, SMTP_USER, SMTP_PASSWORD, ALERT_EMAIL_TO) "
+        "ou Telegram (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)."
+    )
 
 
 def filtrar_novos(
@@ -292,8 +382,6 @@ def checar_e_avisar(
     watchlist_path: Path | None = None,
     state_path: Path | None = None,
     dry_run: bool = False,
-    token: str | None = None,
-    chat_id: str | None = None,
 ) -> ChecagemResultado:
     out = ChecagemResultado()
     items = load_watchlist(watchlist_path)
@@ -315,21 +403,18 @@ def checar_e_avisar(
 
     enviou = False
     if novos:
-        msg = formatar_mensagem(novos)
+        msg = formatar_mensagem(novos, markdown=False)
         if dry_run:
             out.enviados = [_chave(s) for s in novos]
             print(msg)
         else:
-            tok = token or os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-            cid = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-            if not tok or not cid:
-                out.erros.append(
-                    "Defina TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID para enviar."
-                )
-            else:
-                enviar_telegram(msg, token=tok, chat_id=cid)
+            try:
+                canais = disparar_avisos(novos)
                 out.enviados = [_chave(s) for s in novos]
                 enviou = True
+                print(f"Enviado via: {', '.join(canais)}")
+            except Exception as exc:  # noqa: BLE001
+                out.erros.append(str(exc))
 
     if enviou:
         filtrar_novos(todos, state, registrar=True)

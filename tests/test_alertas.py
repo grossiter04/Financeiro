@@ -67,3 +67,22 @@ def test_formatar_mensagem():
     assert "TAEE11" in msg
     assert "BAZIN" in msg
     assert "GRAHAM" in msg
+    assert "*" not in msg
+
+
+def test_smtp_config_from_env(monkeypatch):
+    from calculadora.alertas import _smtp_config_from_env
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    assert _smtp_config_from_env() is None
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setenv("SMTP_USER", "a@gmail.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "xxxx")
+    monkeypatch.setenv("ALERT_EMAIL_TO", "b@gmail.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    cfg = _smtp_config_from_env()
+    assert cfg is not None
+    assert cfg["host"] == "smtp.gmail.com"
+    assert cfg["para"] == "b@gmail.com"
+    assert cfg["port"] == 587

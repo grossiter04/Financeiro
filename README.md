@@ -1,6 +1,6 @@
 # Calculadora de preço teto por proventos
 
-Calculadora web local + **alertas no Telegram** via GitHub Actions (grátis), para avisar quando uma ação estiver barata (Bazin / Graham / seu DY / preço manual).
+Calculadora web local + **alertas por e-mail** via GitHub Actions (grátis), para avisar quando uma ação estiver barata (Bazin / Graham / seu DY / preço manual).
 
 ## Como rodar (local)
 
@@ -14,22 +14,30 @@ streamlit run calculadora/app.py
 
 Abre em geral em `http://localhost:8501`.
 
-## Alertas no Telegram (recomendado)
+## Alertas por e-mail (recomendado)
 
-Checagem a cada **~10 minutos** no pregão da B3 (seg–sex, ~10h–18h BRT). É o intervalo mais frequente estável no GitHub Actions sem estourar minutos do repo privado. Fora do pregão não roda (preço quase não muda).
+Checagem a cada **~10 minutos** no pregão da B3 (seg–sex, ~10h–18h BRT).
 
-### 1. Criar o bot
+### 1. Senha de app do Gmail (exemplo)
 
-1. No Telegram, abra [@BotFather](https://t.me/BotFather) → `/newbot` → copie o **token**.
-2. Fale com o seu bot (Start).
-3. Abra `https://api.telegram.org/bot<TOKEN>/getUpdates` e anote o **chat.id** (número).
+1. Conta Google → **Segurança** → ative **Verificação em 2 etapas**.
+2. Em [Senhas de app](https://myaccount.google.com/apppasswords), crie uma para “Mail”.
+3. Copie a senha de 16 caracteres (não é a senha normal do Gmail).
 
 ### 2. Secrets no GitHub
 
-No repo `grossiter04/Financeiro` → **Settings → Secrets and variables → Actions**:
+No repo `grossiter04/Financeiro` → **Settings → Secrets and variables → Actions**, crie:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+| Secret | Exemplo Gmail |
+|---|---|
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `seu@gmail.com` |
+| `SMTP_PASSWORD` | senha de app |
+| `ALERT_EMAIL_TO` | e-mail que recebe o alerta (pode ser o mesmo) |
+| `SMTP_FROM` | opcional; padrão = `SMTP_USER` |
+
+Com SMTP configurado, o e-mail tem prioridade. Telegram só entra se SMTP **não** estiver definido.
 
 ### 3. Watchlist
 
@@ -44,12 +52,10 @@ ticker = "TAEE11"
 preco_maximo = 35.0
 ```
 
-Critérios padrão: Bazin, Graham e seu DY (`dy_padrao`). O aviso só dispara de novo se o preço sair da zona barata e voltar (anti-spam).
-
 ### 4. Testar
 
-- Local: `python -m calculadora.alertas_cli --dry-run` (ou sem `--dry-run` com as env vars).
-- GitHub: **Actions → Alertas de preço → Run workflow**.
+- Local: `python -m calculadora.alertas_cli --dry-run`
+- GitHub: **Actions → Alertas de preço → Run workflow**
 
 ## Como usar a calculadora
 
@@ -57,13 +63,6 @@ Critérios padrão: Bazin, Graham e seu DY (`dy_padrao`). O aviso só dispara de
 2. Em cada aba: ticker (busca automática).
 3. Proventos em **Opções** se quiser editar.
 4. Contas Bazin/Graham, gráfico e comparativo 3/4/11.
-
-### Formato dos proventos
-
-```
-Dividendo	14/08/2026	26/11/2026	0,08025458
-JCP	14/08/2026	26/11/2026	0,11982486
-```
 
 ## Regras de cálculo
 
@@ -80,4 +79,4 @@ JCP	14/08/2026	26/11/2026	0,11982486
 
 ## Hosting da UI (opcional)
 
-A calculadora **não precisa** estar online para os alertas funcionarem. Se quiser UI na nuvem com SQLite persistente, use Railway + volume em `/app/data` (ver `Dockerfile` / `railway.toml`). O Streamlit Cloud gratuito pode apagar o banco ao hibernar.
+A calculadora **não precisa** estar online para os alertas. Railway + volume `/app/data` se quiser UI persistente; Streamlit Cloud gratuito pode apagar o SQLite.

@@ -9,11 +9,11 @@ from calculadora.alertas import checar_e_avisar
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Checa preços e avisa no Telegram")
+    parser = argparse.ArgumentParser(description="Checa preços e avisa por e-mail/Telegram")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Só imprime; não envia Telegram",
+        help="Só imprime; não envia aviso",
     )
     args = parser.parse_args(argv)
 
