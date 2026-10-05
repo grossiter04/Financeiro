@@ -463,6 +463,75 @@ def frequencia_meses_pagamento(
 
 
 # ---------------------------------------------------------------------------
+# Contas clássicas (Bazin / Graham)
+# ---------------------------------------------------------------------------
+
+BAZIN_DY = 0.06  # Décio Bazin: teto com DY mínimo de 6%
+
+
+@dataclass
+class ContaClassica:
+    nome: str
+    preco_justo: float | None
+    preco_atual: float
+    diferenca: float | None  # atual/justo − 1; negativo = barata
+    veredito: str
+    detalhe: str = ""
+
+
+def preco_teto_bazin(base_liquida: float, *, dy: float = BAZIN_DY) -> float:
+    """Preço teto de Bazin: provento (base) ÷ DY alvo (padrão 6%)."""
+    if dy <= 0:
+        raise ValueError("DY de Bazin deve ser > 0")
+    return base_liquida / dy
+
+
+def preco_graham(lpa: float, vpa: float) -> float:
+    """
+    Número de Graham clássico: √(22,5 × LPA × VPA).
+    Exige LPA e VPA positivos.
+    """
+    if lpa <= 0 or vpa <= 0:
+        raise ValueError("LPA e VPA precisam ser positivos para Graham")
+    return (22.5 * lpa * vpa) ** 0.5
+
+
+def _veredito_vs_justo(preco_atual: float, preco_justo: float) -> tuple[float, str]:
+    diferenca = preco_atual / preco_justo - 1.0
+    if diferenca < 0:
+        return diferenca, f"Barata: {abs(diferenca) * 100:.1f}% abaixo"
+    if diferenca > 0:
+        return diferenca, f"Cara: {diferenca * 100:.1f}% acima"
+    return 0.0, "No justo"
+
+
+def conta_bazin(base_liquida: float, preco_atual: float, *, dy: float = BAZIN_DY) -> ContaClassica:
+    justo = preco_teto_bazin(base_liquida, dy=dy)
+    dif, ver = _veredito_vs_justo(preco_atual, justo)
+    return ContaClassica(
+        nome="Bazin",
+        preco_justo=justo,
+        preco_atual=preco_atual,
+        diferenca=dif,
+        veredito=ver,
+        detalhe=f"Teto = base líquida ÷ {dy * 100:.0f}%",
+    )
+
+
+def conta_graham(lpa: float, vpa: float, preco_atual: float) -> ContaClassica:
+    justo = preco_graham(lpa, vpa)
+    dif, ver = _veredito_vs_justo(preco_atual, justo)
+    return ContaClassica(
+        nome="Graham",
+        preco_justo=justo,
+        preco_atual=preco_atual,
+        diferenca=dif,
+        veredito=ver,
+        detalhe=f"√(22,5 × LPA {lpa:.4f} × VPA {vpa:.4f})",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Valuation
 # ---------------------------------------------------------------------------
 

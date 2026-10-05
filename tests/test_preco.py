@@ -1,10 +1,10 @@
-"""Testes da cotação (sem rede, só formatação)."""
+"""Testes da cotação e helpers (sem rede)."""
 
 from __future__ import annotations
 
 import pytest
 
-from calculadora.preco import _simbolo_yahoo
+from calculadora.preco import RANGES_HISTORICO, _simbolo_yahoo, logo_url
 
 
 def test_simbolo_yahoo():
@@ -15,3 +15,13 @@ def test_simbolo_yahoo():
 def test_simbolo_vazio():
     with pytest.raises(ValueError):
         _simbolo_yahoo("  ")
+
+
+def test_logo_url():
+    assert logo_url("itub4") == "https://icons.brapi.dev/icons/ITUB4.svg"
+    assert logo_url("EXEMPLO") == ""
+    assert logo_url("") == ""
+
+
+def test_ranges_historico():
+    assert "1y" in RANGES_HISTORICO

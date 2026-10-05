@@ -15,7 +15,11 @@ from calculadora.core import (
     aplicar_ir,
     agrupar_por_ano,
     calculate,
+    conta_bazin,
+    conta_graham,
     parse_proventos,
+    preco_graham,
+    preco_teto_bazin,
     selecionar_anos,
 )
 
@@ -310,3 +314,24 @@ Dividendo	01/06/2025	01/07/2025	3,00
     )
     assert result.anos_selecionados == [2022, 2024, 2025]
     assert result.base == pytest.approx((1 + 2 + 3) / 3)
+
+
+def test_bazin_teto():
+    assert preco_teto_bazin(1.2) == pytest.approx(20.0)
+    conta = conta_bazin(1.2, 18.0)
+    assert conta.preco_justo == pytest.approx(20.0)
+    assert conta.diferenca is not None and conta.diferenca < 0
+    assert "Barata" in conta.veredito
+
+
+def test_graham_numero():
+    # √(22.5 × 4 × 20) = √1800 ≈ 42.426
+    justo = preco_graham(4.0, 20.0)
+    assert justo == pytest.approx((22.5 * 4 * 20) ** 0.5)
+    conta = conta_graham(4.0, 20.0, 40.0)
+    assert conta.diferenca is not None and conta.diferenca < 0
+
+
+def test_graham_lpa_negativo():
+    with pytest.raises(ValueError):
+        preco_graham(-1.0, 10.0)

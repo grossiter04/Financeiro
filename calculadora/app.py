@@ -8,6 +8,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 # Streamlit roda este arquivo como script: a raiz do projeto precisa estar no path.
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -15,9 +17,26 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
-from calculadora.core import BaseMethod, ValuationResult, YearCriterion, calculate
+from calculadora.classes import (
+    AnalisePrecoUnit,
+    ClasseComparativo,
+    analisar_preco_unit,
+    comparar_classes,
+    melhor_por_margem,
+)
+from calculadora.core import (
+    BAZIN_DY,
+    BaseMethod,
+    ContaClassica,
+    ValuationResult,
+    YearCriterion,
+    calculate,
+    conta_bazin,
+    conta_graham,
+)
 from calculadora.empresa import EmpresaInfo, fetch_empresa
-from calculadora.preco import fetch_preco
+from calculadora.fundamentos import Fundamentos, fetch_fundamentos
+from calculadora.preco import RANGES_HISTORICO, fetch_historico, fetch_preco, logo_url
 from calculadora.proventos_fetch import fetch_proventos
 from calculadora.storage import excluir_acao, listar_acoes, obter_acao, salvar_acao
 from calculadora.tab_bar import browser_tabs
@@ -46,8 +65,7 @@ def _init_state() -> None:
         st.session_state.acoes = [_default_acao()]
     if "active_tab" not in st.session_state:
         st.session_state.active_tab = 0
-    if "auto_preco_ligado" not in st.session_state:
-        st.session_state.auto_preco_ligado = False
+    st.session_state.auto_preco_ligado = True
     if "auto_preco_intervalo" not in st.session_state:
         st.session_state.auto_preco_intervalo = 30
     if "empresa_cache" not in st.session_state:
@@ -71,44 +89,211 @@ def _obter_empresa(ticker: str) -> EmpresaInfo | None:
 
 
 def _on_ticker_change(tab_i: int) -> None:
-    """Dispara busca de descrição (e proventos, se o campo estiver vazio)."""
+    """Ao mudar o ticker: descrição, preço, proventos e salvamento automático."""
     ticker = str(st.session_state.get(f"ticker_{tab_i}", "") or "").strip().upper()
     if not ticker:
         return
-    # Invalida só este ticker se o usuário reescrever o mesmo campo
+
     cache: dict = st.session_state.setdefault("empresa_cache", {})
-    # Se já temos cache ok, reaproveita; se era None (falha), tenta de novo
     if ticker not in cache or cache[ticker] is None:
         cache.pop(ticker, None)
         _obter_empresa(ticker)
 
+    if ticker == "EXEMPLO":
+        return
+
+    # Preço ao vivo
+    try:
+        cot = fetch_preco(ticker)
+        st.session_state[f"preco_{tab_i}"] = float(cot.preco)
+        quando = cot.horario.strftime("%d/%m/%Y %H:%M") if cot.horario else "agora"
+        st.session_state[f"preco_msg_{tab_i}"] = (
+            f"Preço {cot.ticker}: R$ {cot.preco:.4f} ({cot.fonte}, {quando} BRT)"
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.session_state[f"preco_msg_{tab_i}"] = f"Preço: falha automática ({exc})"
+
+    # Proventos: busca se vazio ou se o ticker da aba mudou
+    ultimo = str(st.session_state.get(f"_auto_ticker_{tab_i}", "") or "")
     prov_atual = str(st.session_state.get(f"proventos_{tab_i}", "") or "").strip()
-    if prov_atual or ticker == "EXEMPLO":
+    precisa_prov = (not prov_atual) or (ultimo != ticker)
+    if precisa_prov:
+        try:
+            got = fetch_proventos(ticker)
+            st.session_state[f"proventos_{tab_i}"] = got.texto
+            st.session_state[f"proventos_msg_{tab_i}"] = (
+                f"{got.quantidade} provento(s) via {got.fonte}"
+            )
+            if got.avisos:
+                st.session_state[f"proventos_avisos_{tab_i}"] = got.avisos[:8]
+        except Exception as exc:  # noqa: BLE001
+            st.session_state[f"proventos_msg_{tab_i}"] = (
+                f"Proventos: falha automática ({exc})"
+            )
+
+    st.session_state[f"_auto_ticker_{tab_i}"] = ticker
+
+    # Salva se já tiver dados mínimos
+    _tentar_auto_salvar(
+        tab_i,
+        ticker=ticker,
+        preco=float(st.session_state.get(f"preco_{tab_i}", 0) or 0),
+        dy=float(st.session_state.get(f"dy_{tab_i}", 6) or 6),
+        proventos=str(st.session_state.get(f"proventos_{tab_i}", "") or ""),
+    )
+
+
+def _tentar_auto_salvar(
+    tab_i: int,
+    *,
+    ticker: str,
+    preco: float,
+    dy: float,
+    proventos: str,
+) -> None:
+    """Grava no SQLite quando ticker + preço + proventos estão ok (sem spam)."""
+    t = ticker.strip().upper()
+    if not t or t == "EXEMPLO":
+        return
+    if preco <= 0 or not proventos.strip() or dy <= 0:
+        return
+    fp = f"{t}|{preco:.6f}|{dy:.4f}|{hash(proventos)}"
+    if st.session_state.get(f"_saved_fp_{tab_i}") == fp:
         return
     try:
-        got = fetch_proventos(ticker)
+        salva = salvar_acao(ticker=t, preco=preco, dy=dy, proventos=proventos)
     except Exception as exc:  # noqa: BLE001
-        st.session_state[f"proventos_msg_{tab_i}"] = f"Proventos: falha automática ({exc})"
+        st.session_state[f"save_msg_{tab_i}"] = f"Auto-salvar falhou: {exc}"
         return
-    # text_area ainda não foi criado neste run — pode setar direto
-    st.session_state[f"proventos_{tab_i}"] = got.texto
-    st.session_state[f"proventos_msg_{tab_i}"] = (
-        f"{got.quantidade} provento(s) via {got.fonte}"
+    st.session_state[f"_saved_fp_{tab_i}"] = fp
+    st.session_state[f"save_msg_{tab_i}"] = (
+        f"Salvo automaticamente: {salva.ticker}"
     )
-    if got.avisos:
-        st.session_state[f"proventos_avisos_{tab_i}"] = got.avisos[:8]
+
+
+def _abrir_acao_salva(ticker: str) -> None:
+    acao = obter_acao(ticker)
+    if not acao:
+        return
+    _load_acoes_into_tabs(
+        [
+            {
+                "ticker": acao.ticker,
+                "preco": acao.preco,
+                "dy": acao.dy,
+                "proventos": acao.proventos,
+            }
+        ],
+        replace=False,
+    )
+    _apply_pending_updates()
+
+
+def _render_lista_salvas(salvas: list) -> None:
+    """Selectbox compacto (como antes), com logo pequeno ao lado do ticker escolhido."""
+    tickers = [a.ticker for a in salvas]
+
+    def _abrir_salva_callback() -> None:
+        ticker = st.session_state.get("sidebar_abrir_ticker")
+        if ticker:
+            _abrir_acao_salva(str(ticker))
+
+    escolhido = st.session_state.get("sidebar_abrir_ticker")
+    logo = logo_url(str(escolhido)) if escolhido else ""
+
+    c_logo, c_sel = st.columns([1, 8], vertical_alignment="bottom")
+    with c_logo:
+        if logo:
+            st.markdown(
+                f'<div style="padding-bottom:0.35rem">'
+                f'<img src="{logo}" width="22" height="22" '
+                f'style="border-radius:3px;object-fit:contain;background:#fff;'
+                f'display:block;" '
+                f'onerror="this.style.visibility=\'hidden\'" /></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="width:22px;height:22px;padding-bottom:0.35rem"></div>',
+                unsafe_allow_html=True,
+            )
+    with c_sel:
+        st.selectbox(
+            "Abrir",
+            options=tickers,
+            index=None,
+            placeholder="Escolha uma ação…",
+            key="sidebar_abrir_ticker",
+            on_change=_abrir_salva_callback,
+            help="Selecione para abrir na calculadora.",
+        )
+    st.caption(f"{len(salvas)} salva(s)")
 
 
 def _render_empresa(info: EmpresaInfo | None, *, ticker: str) -> None:
     if not ticker.strip():
         return
-    if info is None:
-        st.caption("Não encontrei descrição automática para este ticker.")
+    logo = (info.logo_url if info else "") or logo_url(ticker)
+    col_logo, col_txt = st.columns([1, 8], vertical_alignment="center")
+    with col_logo:
+        if logo:
+            st.image(logo, width=56)
+    with col_txt:
+        if info is None:
+            st.caption("Não encontrei descrição automática para este ticker.")
+            return
+        st.markdown(f"**{info.resumo}**")
+        if info.descricao:
+            st.caption(info.descricao)
+        st.caption(f"Fonte: {info.fonte}")
+
+
+def _obter_historico(ticker: str, periodo: str):
+    cache: dict = st.session_state.setdefault("hist_cache", {})
+    chave = f"{ticker.strip().upper()}:{periodo}"
+    if chave in cache:
+        return cache[chave]
+    try:
+        hist = fetch_historico(ticker, periodo=periodo)
+    except Exception as exc:  # noqa: BLE001
+        cache[chave] = exc
+        return exc
+    cache[chave] = hist
+    return hist
+
+
+def _render_grafico_preco(ticker: str, tab_i: int) -> None:
+    t = ticker.strip().upper()
+    if not t or t == "EXEMPLO":
         return
-    st.markdown(f"**{info.resumo}**")
-    if info.descricao:
-        st.caption(info.descricao)
-    st.caption(f"Fonte: {info.fonte}")
+
+    st.markdown("##### Evolução do preço")
+    opcoes = list(RANGES_HISTORICO.keys())
+    periodo = st.selectbox(
+        "Período",
+        options=opcoes,
+        index=opcoes.index("1y") if "1y" in opcoes else 0,
+        format_func=lambda k: RANGES_HISTORICO[k],
+        key=f"hist_range_{tab_i}",
+    )
+    resultado = _obter_historico(t, periodo)
+    if isinstance(resultado, Exception):
+        st.caption(f"Não foi possível carregar o gráfico: {resultado}")
+        return
+
+    df = pd.DataFrame(
+        {"Preço (R$)": [p.preco for p in resultado.pontos]},
+        index=pd.to_datetime([p.data for p in resultado.pontos]),
+    )
+    st.line_chart(df, height=240)
+    primeiro = resultado.pontos[0]
+    ultimo = resultado.pontos[-1]
+    var = (ultimo.preco / primeiro.preco - 1.0) * 100.0 if primeiro.preco else 0.0
+    st.caption(
+        f"{primeiro.data.strftime('%d/%m/%Y')}: R$ {primeiro.preco:.2f} → "
+        f"{ultimo.data.strftime('%d/%m/%Y')}: R$ {ultimo.preco:.2f} "
+        f"({var:+.1f}%) · {resultado.fonte}"
+    )
 
 
 def _atualizar_precos_abertas() -> tuple[int, list[str]]:
@@ -301,9 +486,14 @@ def _render_tab_bar() -> None:
         str(a.get("ticker", "") or "").strip() or f"Ação {i + 1}"
         for i, a in enumerate(st.session_state.acoes)
     ]
+    logos = [
+        logo_url(str(a.get("ticker", "") or ""))
+        for a in st.session_state.acoes
+    ]
 
     event = browser_tabs(
         labels,
+        logos=logos,
         active=int(st.session_state.active_tab),
         key="browser_tabs",
     )
@@ -351,11 +541,11 @@ def _clear_acao_widgets(n: int) -> None:
             "preco_",
             "dy_",
             "proventos_",
-            "salvar_",
-            "buscar_prov_",
             "exemplo_",
+            "reload_",
             "proventos_msg_",
             "proventos_avisos_",
+            "hist_range_",
         ):
             st.session_state.pop(f"{prefix}{i}", None)
 
@@ -414,6 +604,261 @@ def _load_acoes_into_tabs(novas: list[dict], *, replace: bool = False) -> None:
         st.session_state.active_tab = len(st.session_state.acoes) - 1
 
 
+def _obter_fundamentos(ticker: str) -> Fundamentos | None:
+    t = str(ticker or "").strip().upper().removesuffix(".SA")
+    if not t or t == "EXEMPLO":
+        return None
+    cache: dict = st.session_state.setdefault("fund_cache", {})
+    if t in cache:
+        return cache[t]
+    try:
+        info = fetch_fundamentos(t)
+    except Exception:  # noqa: BLE001
+        info = None
+    cache[t] = info
+    return info
+
+
+def _render_conta_card(conta: ContaClassica) -> None:
+    dif = conta.diferenca or 0.0
+    if dif < 0:
+        st.success(f"**{conta.nome}** — {conta.veredito}")
+    elif dif > 0:
+        st.error(f"**{conta.nome}** — {conta.veredito}")
+    else:
+        st.info(f"**{conta.nome}** — {conta.veredito}")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Preço justo", _fmt_money(conta.preco_justo))
+    m2.metric("Preço atual", _fmt_money(conta.preco_atual))
+    m3.metric("% vs justo", _fmt_pct(conta.diferenca))
+    if conta.detalhe:
+        st.caption(conta.detalhe)
+
+
+def _render_contas_classicas(result: ValuationResult) -> None:
+    """Bazin (proventos ÷ 6%) e Graham (√22,5×LPA×VPA)."""
+    st.subheader("Contas clássicas")
+    col_b, col_g = st.columns(2)
+
+    with col_b:
+        if result.base is not None and result.base > 0 and result.preco_atual > 0:
+            _render_conta_card(conta_bazin(result.base, result.preco_atual))
+            if abs(result.dy_desejado - BAZIN_DY) > 1e-9:
+                st.caption(
+                    f"Seu DY desejado na calculadora é {_fmt_pct(result.dy_desejado)}; "
+                    f"Bazin usa fixo {_fmt_pct(BAZIN_DY)}."
+                )
+        else:
+            st.caption("Bazin: precisa de base de proventos e preço.")
+
+    with col_g:
+        fund = _obter_fundamentos(result.ticker)
+        if fund is None:
+            st.caption("Graham: não encontrei LPA/VPA para este ticker.")
+        elif fund.lpa is None or fund.vpa is None:
+            st.caption(
+                f"Graham: dados incompletos "
+                f"(LPA={fund.lpa}, VPA={fund.vpa}, fonte {fund.fonte})."
+            )
+        elif fund.lpa <= 0 or fund.vpa <= 0:
+            st.caption(
+                f"Graham: LPA/VPA precisam ser positivos "
+                f"(LPA={fund.lpa:.4f}, VPA={fund.vpa:.4f})."
+            )
+        else:
+            try:
+                _render_conta_card(
+                    conta_graham(fund.lpa, fund.vpa, result.preco_atual)
+                )
+                st.caption(f"LPA {fund.lpa:.4f} · VPA {fund.vpa:.4f} · {fund.fonte}")
+            except Exception as exc:  # noqa: BLE001
+                st.caption(f"Graham: {exc}")
+
+
+def _render_analise_preco_unit(analise: AnalisePrecoUnit) -> None:
+    """Unit (11) vs soma dos componentes ON/PN avulsos."""
+    st.markdown("**Preço final: unit vs montar separado**")
+    formula = " + ".join(
+        f"{qtd}×{tick} ({_fmt_money(preco)})"
+        for tick, qtd, preco, _ in analise.componentes
+    )
+    st.caption(f"Composição: {formula}")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Preço da unit", _fmt_money(analise.preco_unit))
+    c2.metric("Soma avulsos", _fmt_money(analise.soma_componentes))
+    c3.metric("Diferença R$", _fmt_money(analise.diff_reais))
+    c4.metric("% unit vs avulsos", _fmt_pct(analise.pct_diff))
+
+    if analise.pct_diff < -0.001:
+        st.success(analise.veredito)
+    elif analise.pct_diff > 0.001:
+        st.warning(analise.veredito)
+    else:
+        st.info(analise.veredito)
+
+    det = [
+        {
+            "Componente": tick,
+            "Qtd": qtd,
+            "Preço": round(preco, 4),
+            "Subtotal": round(sub, 4),
+        }
+        for tick, qtd, preco, sub in analise.componentes
+    ]
+    st.dataframe(det, use_container_width=True, hide_index=True)
+
+
+def _fmt_resumo_melhor(rotulo: str, melhor: ClasseComparativo | None, pct: float | None, atual: str) -> str | None:
+    if melhor is None or pct is None:
+        return None
+    marca = " ← aberta" if melhor.ticker == atual else ""
+    return f"**{rotulo}:** {melhor.ticker}{marca} ({melhor.tipo}) — {pct * 100:.1f}% vs teto"
+
+
+def _obter_comparativo_classes(
+    ticker: str,
+    *,
+    dy_desejado: float,
+    n_ultimos: int | None,
+    anos_especificos: list[int] | None,
+    metodo: BaseMethod,
+    criterio: YearCriterion,
+    incluir_ano_andamento: bool,
+    proventos_conhecidos: dict[str, str],
+) -> list[ClasseComparativo]:
+    cache: dict = st.session_state.setdefault("classes_cache", {})
+    chave = (
+        f"{ticker.upper()}|{dy_desejado}|{n_ultimos}|{anos_especificos}|"
+        f"{metodo.value}|{criterio.value}|{incluir_ano_andamento}"
+    )
+    if chave in cache:
+        return cache[chave]
+    try:
+        with st.spinner("Comparando classes ON/PN/Unit…"):
+            linhas = comparar_classes(
+                ticker,
+                dy_desejado=dy_desejado,
+                n_ultimos=n_ultimos,
+                anos_especificos=anos_especificos,
+                metodo=metodo,
+                criterio=criterio,
+                incluir_ano_andamento=incluir_ano_andamento,
+                proventos_conhecidos=proventos_conhecidos,
+            )
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"Comparativo de classes indisponível: {exc}")
+        linhas = []
+    cache[chave] = linhas
+    return linhas
+
+
+def _render_comparativo_classes(
+    ticker: str,
+    *,
+    dy_desejado: float,
+    n_ultimos: int | None,
+    anos_especificos: list[int] | None,
+    metodo: BaseMethod,
+    criterio: YearCriterion,
+    incluir_ano_andamento: bool,
+    proventos_conhecidos: dict[str, str],
+) -> None:
+    linhas = _obter_comparativo_classes(
+        ticker,
+        dy_desejado=dy_desejado,
+        n_ultimos=n_ultimos,
+        anos_especificos=anos_especificos,
+        metodo=metodo,
+        criterio=criterio,
+        incluir_ano_andamento=incluir_ano_andamento,
+        proventos_conhecidos=proventos_conhecidos,
+    )
+    if len(linhas) < 2:
+        return
+
+    st.subheader("Qual classe comprar? (3 / 4 / 11)")
+    st.caption(
+        "Mesma empresa, classes diferentes. Compare por **seu DY**, **Bazin** e **Graham**. "
+        "Valores % negativos = mais barato que o teto daquele critério. "
+        "Para unit (11), veja também o bloco de preço final abaixo."
+    )
+
+    atual = ticker.strip().upper()
+    melhor_bazin = melhor_por_margem(linhas, "pct_bazin")
+    melhor_graham = melhor_por_margem(linhas, "pct_graham")
+    melhor_usuario = melhor_por_margem(linhas, "pct_usuario")
+
+    resumos = [
+        r
+        for r in (
+            _fmt_resumo_melhor("Bazin (proventos ÷ 6%)", melhor_bazin, melhor_bazin.pct_bazin if melhor_bazin else None, atual),
+            _fmt_resumo_melhor("Graham", melhor_graham, melhor_graham.pct_graham if melhor_graham else None, atual),
+            _fmt_resumo_melhor(f"Seu DY ({dy_desejado:.1f}%)", melhor_usuario, melhor_usuario.pct_usuario if melhor_usuario else None, atual),
+        )
+        if r
+    ]
+    if resumos:
+        st.markdown(" · ".join(resumos))
+
+    tabela = []
+    for c in linhas:
+        marca = " ← aberta" if c.ticker == atual else ""
+        tabela.append(
+            {
+                "Ticker": f"{c.ticker}{marca}",
+                "Tipo": c.tipo,
+                "Preço": round(c.preco, 4),
+                "DY atual %": round(c.dy_atual * 100, 2) if c.dy_atual is not None else None,
+                "% seu DY": round(c.pct_usuario * 100, 2) if c.pct_usuario is not None else None,
+                "Teto seu DY": round(c.teto_usuario, 4) if c.teto_usuario is not None else None,
+                "% Bazin": round(c.pct_bazin * 100, 2) if c.pct_bazin is not None else None,
+                "Teto Bazin": round(c.teto_bazin, 4) if c.teto_bazin is not None else None,
+                "% Graham": round(c.pct_graham * 100, 2) if c.pct_graham is not None else None,
+                "Teto Graham": round(c.teto_graham, 4) if c.teto_graham is not None else None,
+            }
+        )
+    st.dataframe(tabela, use_container_width=True, hide_index=True)
+
+    try:
+        unit_analise = analisar_preco_unit(linhas)
+    except Exception:  # noqa: BLE001
+        unit_analise = None
+    if unit_analise is not None:
+        _render_analise_preco_unit(unit_analise)
+
+    # Atalhos para abrir outra classe
+    outras = [c for c in linhas if c.ticker != atual]
+    if outras:
+        cols = st.columns(min(len(outras), 4))
+        for col, c in zip(cols, outras):
+            with col:
+                if st.button(
+                    f"Abrir {c.ticker}",
+                    key=f"abrir_classe_{atual}_{c.ticker}",
+                    use_container_width=True,
+                ):
+                    prov = ""
+                    try:
+                        got = fetch_proventos(c.ticker)
+                        prov = got.texto
+                    except Exception:  # noqa: BLE001
+                        pass
+                    dy_pct = float(st.session_state.get(f"dy_{st.session_state.active_tab}", 6) or 6)
+                    _load_acoes_into_tabs(
+                        [
+                            {
+                                "ticker": c.ticker,
+                                "preco": c.preco,
+                                "dy": dy_pct,
+                                "proventos": prov,
+                            }
+                        ],
+                        replace=False,
+                    )
+                    st.rerun()
+
+
 def _fmt_money(v: float | None) -> str:
     if v is None:
         return "—"
@@ -426,7 +871,16 @@ def _fmt_pct(v: float | None) -> str:
     return f"{v * 100:.2f}%".replace(".", ",")
 
 
-def _render_resultado(result: ValuationResult) -> None:
+def _render_resultado(
+    result: ValuationResult,
+    *,
+    n_ultimos: int | None = 5,
+    anos_especificos: list[int] | None = None,
+    metodo: BaseMethod = BaseMethod.MEDIA,
+    criterio: YearCriterion = YearCriterion.DATA_COM,
+    incluir_ano_andamento: bool = False,
+    proventos_conhecidos: dict[str, str] | None = None,
+) -> None:
     if result.erros:
         for err in result.erros:
             st.warning(err)
@@ -480,6 +934,18 @@ def _render_resultado(result: ValuationResult) -> None:
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
     _render_meses_pagamento(result)
+    _render_contas_classicas(result)
+    if result.ticker:
+        _render_comparativo_classes(
+            result.ticker,
+            dy_desejado=result.dy_desejado,
+            n_ultimos=n_ultimos,
+            anos_especificos=anos_especificos,
+            metodo=metodo,
+            criterio=criterio,
+            incluir_ano_andamento=incluir_ano_andamento,
+            proventos_conhecidos=proventos_conhecidos or {},
+        )
 
 
 def _render_meses_pagamento(result: ValuationResult) -> None:
@@ -519,8 +985,8 @@ def main() -> None:
 
     st.title("Calculadora de preço teto por proventos")
     st.caption(
-        "Cole os proventos, informe preço e DY desejado. "
-        "Salve a ação para não perder os dados ao fechar o app."
+        "Digite o ticker: preço, proventos e descrição vêm sozinhos. "
+        "A ação é salva automaticamente."
     )
 
     salvas = listar_acoes()
@@ -528,41 +994,10 @@ def main() -> None:
     with st.sidebar:
         st.header("Ações salvas")
         if salvas:
-            tickers = [a.ticker for a in salvas]
-
-            def _abrir_salva_callback() -> None:
-                ticker = st.session_state.get("sidebar_abrir_ticker")
-                if not ticker:
-                    return
-                acao = obter_acao(ticker)
-                if not acao:
-                    return
-                _load_acoes_into_tabs(
-                    [
-                        {
-                            "ticker": acao.ticker,
-                            "preco": acao.preco,
-                            "dy": acao.dy,
-                            "proventos": acao.proventos,
-                        }
-                    ],
-                    replace=False,
-                )
-                # on_change roda antes dos widgets da aba; aplica já nesta execução
-                _apply_pending_updates()
-
-            st.selectbox(
-                "Abrir",
-                options=tickers,
-                index=None,
-                placeholder="Escolha uma ação…",
-                key="sidebar_abrir_ticker",
-                on_change=_abrir_salva_callback,
-                help="Selecione para abrir na calculadora.",
-            )
-            st.caption(f"{len(salvas)} salva(s)")
+            _render_lista_salvas(salvas)
 
             with st.expander("Excluir salva", expanded=False):
+                tickers = [a.ticker for a in salvas]
                 st.selectbox(
                     "Ticker",
                     options=tickers,
@@ -572,12 +1007,9 @@ def main() -> None:
                 if st.button("Excluir selecionada", use_container_width=True):
                     alvo = st.session_state.get("sidebar_excluir_ticker")
                     if alvo and excluir_acao(alvo):
-                        # Limpa seleção de abrir se era a mesma
-                        if st.session_state.get("sidebar_abrir_ticker") == alvo:
-                            st.session_state.sidebar_abrir_ticker = None
                         st.rerun()
         else:
-            st.caption("Nenhuma ação salva ainda. Use **Salvar / atualizar** na aba.")
+            st.caption("Nenhuma ação salva ainda. Digite um ticker na aba.")
 
         st.divider()
         st.header("Controles gerais")
@@ -645,35 +1077,29 @@ def main() -> None:
 
         st.divider()
         st.subheader("Preço ao vivo")
-        st.checkbox(
-            "Atualizar preços automaticamente",
-            key="auto_preco_ligado",
-            help="Busca a cotação de todas as abas abertas no intervalo escolhido.",
-        )
+        st.caption("Preços das abas abertas atualizam automaticamente.")
         st.selectbox(
             "Intervalo",
             options=[15, 30, 60, 120],
             format_func=lambda s: f"{s} segundos",
             key="auto_preco_intervalo",
-            disabled=not st.session_state.get("auto_preco_ligado"),
         )
-        if st.session_state.get("auto_preco_ligado"):
-            status = st.session_state.get("auto_preco_status")
-            if status:
-                st.caption(status)
-            else:
-                st.caption("Aguardando primeira atualização…")
-            if st.button("Atualizar todas agora", use_container_width=True):
-                st.session_state._last_auto_fetch = 0
-                n_ok, erros = _atualizar_precos_abertas()
-                for j, acao in enumerate(st.session_state.acoes):
-                    _queue_update(f"preco_{j}", float(acao.get("preco") or 0.0))
-                horario = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M:%S")
-                msg = f"Auto-preço: {n_ok} atualizada(s) às {horario}"
-                if erros:
-                    msg += f" | falhas: {'; '.join(erros[:3])}"
-                st.session_state.auto_preco_status = msg
-                st.rerun()
+        status = st.session_state.get("auto_preco_status")
+        if status:
+            st.caption(status)
+        else:
+            st.caption("Aguardando primeira atualização…")
+        if st.button("Atualizar todas agora", use_container_width=True):
+            st.session_state._last_auto_fetch = 0
+            n_ok, erros = _atualizar_precos_abertas()
+            for j, acao in enumerate(st.session_state.acoes):
+                _queue_update(f"preco_{j}", float(acao.get("preco") or 0.0))
+            horario = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M:%S")
+            msg = f"Auto-preço: {n_ok} atualizada(s) às {horario}"
+            if erros:
+                msg += f" | falhas: {'; '.join(erros[:3])}"
+            st.session_state.auto_preco_status = msg
+            st.rerun()
 
         st.divider()
         if st.button("+ Nova aba vazia"):
@@ -731,38 +1157,32 @@ def main() -> None:
         else:
             empresa = _obter_empresa(ticker_atual)
         _render_empresa(empresa, ticker=ticker_atual)
+        _render_grafico_preco(ticker_atual, i)
 
-    b1, b2, b3, b4 = st.columns(4)
-    with b1:
-        if st.button("Salvar / atualizar", key=f"salvar_{i}", type="primary"):
-            ticker = str(st.session_state.get(f"ticker_{i}", "")).strip()
-            preco = float(st.session_state.get(f"preco_{i}", 0) or 0)
-            dy = float(st.session_state.get(f"dy_{i}", 6) or 6)
-            proventos = str(st.session_state.get(f"proventos_{i}", "") or "")
-            try:
-                salva = salvar_acao(
-                    ticker=ticker,
-                    preco=preco,
-                    dy=dy,
-                    proventos=proventos,
-                )
-                st.session_state[f"save_msg_{i}"] = (
-                    f"Salvo: {salva.ticker} (atualizado {salva.updated_at})"
-                )
-                _queue_update(f"ticker_{i}", salva.ticker)
-                st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(str(exc))
+    status_bits = []
+    for key in (f"save_msg_{i}", f"preco_msg_{i}", f"proventos_msg_{i}"):
+        msg = st.session_state.pop(key, None)
+        if msg:
+            status_bits.append(msg)
+    if status_bits:
+        st.caption(" · ".join(status_bits))
 
-    with b2:
-        if st.button("Atualizar preço", key=f"preco_live_{i}"):
-            ticker = str(st.session_state.get(f"ticker_{i}", "")).strip()
-            if not ticker:
-                st.error("Informe o ticker antes de atualizar o preço.")
-            else:
+    for aviso in st.session_state.pop(f"proventos_avisos_{i}", []) or []:
+        st.warning(aviso)
+
+    with st.expander("Opções", expanded=False):
+        st.text_area(
+            "Proventos (edite manualmente se quiser)",
+            height=220,
+            key=f"proventos_{i}",
+            placeholder=EXEMPLO.splitlines()[0],
+        )
+
+        if st.button("Recarregar preço e proventos", key=f"reload_{i}"):
+            ticker = str(st.session_state.get(f"ticker_{i}", "") or "").strip()
+            if ticker:
                 try:
-                    with st.spinner("Buscando cotação..."):
-                        cot = fetch_preco(ticker)
+                    cot = fetch_preco(ticker)
                     _queue_update(f"preco_{i}", float(cot.preco))
                     quando = (
                         cot.horario.strftime("%d/%m/%Y %H:%M")
@@ -773,64 +1193,40 @@ def main() -> None:
                         f"Preço {cot.ticker}: R$ {cot.preco:.4f} "
                         f"({cot.fonte}, {quando} BRT)"
                     )
-                    st.rerun()
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Falha ao buscar preço: {exc}")
-
-    with b3:
-        if st.button("Buscar proventos", key=f"buscar_prov_{i}"):
-            ticker = str(st.session_state.get(f"ticker_{i}", "")).strip()
-            if not ticker:
-                st.error("Informe o ticker antes de buscar os proventos.")
-            else:
+                    st.session_state[f"preco_msg_{i}"] = f"Preço: {exc}"
                 try:
-                    with st.spinner("Buscando proventos..."):
-                        got = fetch_proventos(ticker)
+                    got = fetch_proventos(ticker)
                     _queue_update(f"proventos_{i}", got.texto)
                     st.session_state[f"proventos_msg_{i}"] = (
                         f"{got.quantidade} provento(s) via {got.fonte}"
                     )
-                    avisos = got.avisos[:8]
-                    if len(got.avisos) > 8:
-                        avisos.append(f"... e mais {len(got.avisos) - 8} avisos.")
-                    st.session_state[f"proventos_avisos_{i}"] = avisos
-                    st.rerun()
+                    if got.avisos:
+                        st.session_state[f"proventos_avisos_{i}"] = got.avisos[:8]
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Falha ao buscar proventos: {exc}")
-
-    with b4:
+                    st.session_state[f"proventos_msg_{i}"] = f"Proventos: {exc}"
+                st.session_state[f"_auto_ticker_{i}"] = ticker.upper()
+                st.rerun()
         if st.button("Colar exemplo", key=f"exemplo_{i}"):
             _queue_update(f"proventos_{i}", EXEMPLO)
-            if not str(st.session_state.get(f"ticker_{i}", "")).strip():
+            if not str(st.session_state.get(f"ticker_{i}", "") or "").strip():
                 _queue_update(f"ticker_{i}", "EXEMPLO")
             if float(st.session_state.get(f"preco_{i}", 0) or 0) <= 0:
                 _queue_update(f"preco_{i}", 10.0)
             st.rerun()
 
-    msg = st.session_state.pop(f"save_msg_{i}", None)
-    if msg:
-        st.success(msg)
-
-    preco_msg = st.session_state.pop(f"preco_msg_{i}", None)
-    if preco_msg:
-        st.caption(preco_msg)
-
-    prov_msg = st.session_state.pop(f"proventos_msg_{i}", None)
-    if prov_msg:
-        st.caption(prov_msg)
-
-    st.text_area(
-        "Proventos (Tipo, Data-com, Data pagamento, Valor — tab ou ;)",
-        height=220,
-        key=f"proventos_{i}",
-        placeholder=EXEMPLO.splitlines()[0],
-    )
-
-    for aviso in st.session_state.pop(f"proventos_avisos_{i}", []) or []:
-        st.warning(aviso)
-
     # Sincroniza todas as abas (ativa via widgets; demais via estado)
     st.session_state.acoes = _snapshot_acoes_from_widgets()
+
+    # Auto-salvar a aba ativa após edições manuais
+    acao_ativa = st.session_state.acoes[i]
+    _tentar_auto_salvar(
+        i,
+        ticker=str(acao_ativa.get("ticker", "") or ""),
+        preco=float(acao_ativa.get("preco") or 0),
+        dy=float(acao_ativa.get("dy") or 6),
+        proventos=str(acao_ativa.get("proventos") or ""),
+    )
 
     resultados: list[ValuationResult] = []
     for j, acao in enumerate(st.session_state.acoes):
@@ -841,7 +1237,10 @@ def main() -> None:
 
         if not (proventos.strip() and preco > 0):
             if j == i:
-                st.info("Cole os proventos e informe um preço atual maior que zero.")
+                st.info(
+                    "Digite um ticker e pressione Enter — preço e proventos "
+                    "são buscados automaticamente."
+                )
             continue
 
         result = calculate(
@@ -858,7 +1257,20 @@ def main() -> None:
         )
         resultados.append(result)
         if j == i:
-            _render_resultado(result)
+            conhecidos = {
+                str(a.get("ticker", "")).strip().upper(): str(a.get("proventos") or "")
+                for a in st.session_state.acoes
+                if str(a.get("ticker", "")).strip() and str(a.get("proventos") or "").strip()
+            }
+            _render_resultado(
+                result,
+                n_ultimos=n_ultimos,
+                anos_especificos=anos_especificos,
+                metodo=metodo,
+                criterio=criterio,
+                incluir_ano_andamento=incluir_parcial,
+                proventos_conhecidos=conhecidos,
+            )
 
     if len(resultados) >= 2:
         st.divider()
@@ -869,17 +1281,41 @@ def main() -> None:
         )
         tabela = []
         for r in ordenados:
-            tabela.append(
-                {
-                    "Ticker": r.ticker,
-                    "Base líquida": round(r.base, 6) if r.base is not None else None,
-                    "DY atual": round(r.dy_atual * 100, 2) if r.dy_atual is not None else None,
-                    "Preço teto": round(r.preco_teto, 4) if r.preco_teto is not None else None,
-                    "Preço atual": round(r.preco_atual, 4),
-                    "% vs teto": round(r.diferenca * 100, 2) if r.diferenca is not None else None,
-                    "Veredito": r.veredito,
-                }
-            )
+            row = {
+                "Ticker": r.ticker,
+                "Base líquida": round(r.base, 6) if r.base is not None else None,
+                "DY atual": round(r.dy_atual * 100, 2) if r.dy_atual is not None else None,
+                "Teto (seu DY)": round(r.preco_teto, 4) if r.preco_teto is not None else None,
+                "Preço atual": round(r.preco_atual, 4),
+                "% vs teto": round(r.diferenca * 100, 2) if r.diferenca is not None else None,
+                "Veredito": r.veredito,
+            }
+            if r.base is not None and r.base > 0 and r.preco_atual > 0:
+                baz = conta_bazin(r.base, r.preco_atual)
+                row["Teto Bazin"] = round(baz.preco_justo or 0, 4)
+                row["% Bazin"] = (
+                    round(baz.diferenca * 100, 2) if baz.diferenca is not None else None
+                )
+            fund = _obter_fundamentos(r.ticker)
+            if (
+                fund
+                and fund.lpa is not None
+                and fund.vpa is not None
+                and fund.lpa > 0
+                and fund.vpa > 0
+                and r.preco_atual > 0
+            ):
+                try:
+                    gra = conta_graham(fund.lpa, fund.vpa, r.preco_atual)
+                    row["Justo Graham"] = round(gra.preco_justo or 0, 4)
+                    row["% Graham"] = (
+                        round(gra.diferenca * 100, 2)
+                        if gra.diferenca is not None
+                        else None
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            tabela.append(row)
         st.dataframe(tabela, use_container_width=True, hide_index=True)
         st.caption(
             "% vs teto negativo = barata (abaixo do teto). Ordenado da mais barata para a mais cara."

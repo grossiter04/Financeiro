@@ -28,10 +28,10 @@
       .tab {
         display: inline-flex;
         align-items: center;
-        gap: 2px;
-        max-width: 140px;
-        height: 26px;
-        padding: 0 2px 0 10px;
+        gap: 4px;
+        max-width: 160px;
+        height: 28px;
+        padding: 0 2px 0 8px;
         border: 1px solid transparent;
         border-bottom: none;
         border-radius: 7px 7px 0 0;
@@ -41,6 +41,14 @@
         cursor: default;
         user-select: none;
         flex: 0 0 auto;
+      }
+      .logo {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        object-fit: contain;
+        flex: 0 0 auto;
+        background: rgba(255, 255, 255, 0.85);
       }
       .tab:hover {
         opacity: 1;
@@ -133,7 +141,7 @@
         });
       }
 
-      function render(labels, active) {
+      function render(labels, logos, active) {
         const bar = document.getElementById("bar");
         bar.innerHTML = "";
         const solo = labels.length <= 1;
@@ -142,6 +150,20 @@
           tab.className =
             "tab" + (i === active ? " active" : "") + (solo ? " solo" : "");
           tab.title = label;
+
+          const logoSrc = (logos && logos[i]) || "";
+          if (logoSrc) {
+            const img = document.createElement("img");
+            img.className = "logo";
+            img.src = logoSrc;
+            img.alt = "";
+            img.referrerPolicy = "no-referrer";
+            img.addEventListener("error", () => {
+              img.style.display = "none";
+            });
+            img.addEventListener("click", () => send("select", i));
+            tab.appendChild(img);
+          }
 
           const title = document.createElement("span");
           title.className = "title";
@@ -160,7 +182,7 @@
           tab.appendChild(close);
           bar.appendChild(tab);
         });
-        Streamlit.setFrameHeight(Math.max(32, bar.scrollHeight + 2));
+        Streamlit.setFrameHeight(Math.max(34, bar.scrollHeight + 2));
       }
 
       window.addEventListener("message", (event) => {
@@ -170,11 +192,15 @@
           document.body.style.color = data.theme.textColor;
         }
         const args = data.args || {};
-        render(args.labels || ["Ação 1"], Number(args.active) || 0);
+        render(
+          args.labels || ["Ação 1"],
+          args.logos || [],
+          Number(args.active) || 0
+        );
       });
 
       Streamlit.setComponentReady();
-      Streamlit.setFrameHeight(32);
+      Streamlit.setFrameHeight(34);
     </script>
   </body>
 </html>
