@@ -39,18 +39,20 @@ No repo `grossiter04/Financeiro` → **Settings → Secrets and variables → Ac
 
 Com SMTP configurado, o e-mail tem prioridade. Telegram só entra se SMTP **não** estiver definido.
 
-### 3. Watchlist
+### 3. Watchlist (todas as ações salvas)
 
-Edite [`alertas/watchlist.toml`](alertas/watchlist.toml), commit e push. Exemplo:
+O Action vigia o que está em [`alertas/watchlist.toml`](alertas/watchlist.toml).
 
-```toml
-[[acao]]
-ticker = "B3SA3"
+Para incluir **todas** as ações da calculadora local:
 
-[[acao]]
-ticker = "TAEE11"
-preco_maximo = 35.0
+```powershell
+python -m calculadora.sync_watchlist
+git add alertas/watchlist.toml data/acoes.db
+git commit -m "Atualiza watchlist com ações salvas"
+git push
 ```
+
+Também deixe `usar_banco_local = true` (já vem assim após o sync): no job, o `data/acoes.db` do repo entra na lista. Com ~30 papéis a checagem é a cada **~20 min** no pregão.
 
 ### 4. Testar
 
