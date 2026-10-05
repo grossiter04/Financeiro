@@ -11,6 +11,9 @@ dist/
 build/
 .streamlit/secrets.toml
 
+# Estado runtime dos alertas (GitHub Actions cache)
+alertas/state.json
+
 # SQLite temporário; o banco principal (data/acoes.db) sobe de propósito
 *.db-wal
 *.db-shm

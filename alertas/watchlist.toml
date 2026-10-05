@@ -1,0 +1,25 @@
+# Lista de ações para vigiar (GitHub Actions → Telegram).
+# Edite, faça commit e push. O job roda a cada ~10 min no pregão da B3.
+
+dy_padrao = 6.0
+n_anos = 5
+avisar_bazin = true
+avisar_graham = true
+avisar_dy = true
+
+# Também usa tickers salvos em data/acoes.db (se existir no repo).
+# Deixe false no Actions se a lista for grande (rate limit / minutos).
+usar_banco_local = false
+
+# Exemplos — ajuste/remova à vontade.
+[[acao]]
+ticker = "B3SA3"
+
+[[acao]]
+ticker = "TAEE11"
+
+# Alerta também se o preço cair abaixo de um valor fixo (opcional):
+# [[acao]]
+# ticker = "SANB11"
+# preco_maximo = 28.0
+# avisar_graham = false

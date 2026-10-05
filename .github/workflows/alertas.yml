@@ -1,0 +1,47 @@
+name: Alertas de preço
+
+on:
+  schedule:
+    # A cada 10 min, seg–sex, 13:00–20:59 UTC (= 10:00–17:59 BRT, pregão B3)
+    - cron: "*/10 13-20 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: alertas-preco
+  cancel-in-progress: false
+
+jobs:
+  checar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar deps
+        run: pip install -r requirements.txt
+
+      - name: Restaurar state (anti-spam)
+        uses: actions/cache/restore@v4
+        with:
+          path: alertas/state.json
+          key: alertas-state-${{ github.run_id }}
+          restore-keys: |
+            alertas-state-
+
+      - name: Checar e avisar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m calculadora.alertas_cli
+
+      - name: Salvar state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: alertas/state.json
+          key: alertas-state-${{ github.run_id }}
