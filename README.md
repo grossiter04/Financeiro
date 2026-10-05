@@ -16,7 +16,15 @@ Abre em geral em `http://localhost:8501`.
 
 ## Alertas por e-mail (recomendado)
 
-Checagem a cada **~10 minutos** no pregão da B3 (seg–sex, ~10h–18h BRT).
+Checagem em **horários estratégicos** no pregão da B3 (seg–sex):
+
+| Horário (BRT) | Motivo |
+|---|---|
+| **10:05** | logo após a abertura |
+| **13:00** | meio do pregão (~3h depois) |
+| **16:00** | ~1h antes do fechamento (~17h) |
+
+Também dá para rodar manualmente em **Actions → Alertas de preço → Run workflow**.
 
 ### 1. Senha de app do Gmail (exemplo)
 
@@ -52,7 +60,7 @@ git commit -m "Atualiza watchlist com ações salvas"
 git push
 ```
 
-Também deixe `usar_banco_local = true` (já vem assim após o sync): no job, o `data/acoes.db` do repo entra na lista. Com ~30 papéis a checagem é a cada **~20 min** no pregão.
+Também deixe `usar_banco_local = true` (já vem assim após o sync): no job, o `data/acoes.db` do repo entra na lista.
 
 ### 4. Testar
 

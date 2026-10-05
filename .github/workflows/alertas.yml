@@ -2,8 +2,11 @@ name: Alertas de preço
 
 on:
   schedule:
-    # A cada 20 min no pregão (lista grande ~30 tickers)
-    - cron: "*/20 13-20 * * 1-5"
+    # Horários estratégicos (BRT = UTC−3), seg–sex:
+    # 10:05 abertura | 13:00 meio do pregão | 16:00 (~1h antes do fechamento ~17h)
+    - cron: "5 13 * * 1-5"
+    - cron: "0 16 * * 1-5"
+    - cron: "0 19 * * 1-5"
   workflow_dispatch:
     inputs:
       test_email:
