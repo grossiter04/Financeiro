@@ -7,8 +7,10 @@ import os
 import smtplib
 import ssl
 from dataclasses import dataclass, field
+from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -30,9 +32,14 @@ from calculadora.preco import fetch_preco
 from calculadora.proventos_fetch import fetch_proventos
 from calculadora.storage import listar_acoes, obter_acao, resolve_db_path
 
+_BRT = ZoneInfo("America/Sao_Paulo")
 _ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WATCHLIST = _ROOT / "alertas" / "watchlist.toml"
 DEFAULT_STATE = _ROOT / "alertas" / "state.json"
+
+
+def _hoje_brt() -> str:
+    return datetime.now(_BRT).date().isoformat()
 
 
 @dataclass
@@ -366,12 +373,17 @@ def filtrar_novos(
     state: dict,
     *,
     registrar: bool = True,
+    forcar: bool = False,
 ) -> tuple[list[Sinal], list[Sinal]]:
     """
-    Evita spam: só reenvia se o sinal for novo ou se o preço voltou
-    a ficar caro e depois barato de novo (chave saiu do state).
+    Anti-spam diário (fuso BRT):
+    - reenvia no máximo 1x por ticker+critério **por dia**;
+    - no dia seguinte, se ainda estiver barata, avisa de novo;
+    - se sair da zona barata, limpa a chave.
+    forcar=True ignora o anti-spam (útil em Run workflow manual).
     """
     ativos: dict = state.setdefault("ativos", {})
+    hoje = _hoje_brt()
     atuais = {_chave(s) for s in sinais}
     for chave in list(ativos.keys()):
         if chave not in atuais:
@@ -381,12 +393,19 @@ def filtrar_novos(
     repetidos: list[Sinal] = []
     for s in sinais:
         k = _chave(s)
-        if k in ativos:
-            repetidos.append(s)
-        else:
+        meta = ativos.get(k) or {}
+        ja_hoje = isinstance(meta, dict) and meta.get("dia") == hoje
+        if forcar or not ja_hoje:
             novos.append(s)
             if registrar:
-                ativos[k] = {"preco": s.preco, "teto": s.teto, "pct": s.pct}
+                ativos[k] = {
+                    "preco": s.preco,
+                    "teto": s.teto,
+                    "pct": s.pct,
+                    "dia": hoje,
+                }
+        else:
+            repetidos.append(s)
     return novos, repetidos
 
 
@@ -395,6 +414,7 @@ def checar_e_avisar(
     watchlist_path: Path | None = None,
     state_path: Path | None = None,
     dry_run: bool = False,
+    forcar: bool = False,
 ) -> ChecagemResultado:
     out = ChecagemResultado()
     items = load_watchlist(watchlist_path)
@@ -411,7 +431,9 @@ def checar_e_avisar(
 
     out.sinais = todos
     # dry-run não grava no anti-spam (senão bloqueia o aviso real depois)
-    novos, repetidos = filtrar_novos(todos, state, registrar=False)
+    novos, repetidos = filtrar_novos(
+        todos, state, registrar=False, forcar=forcar
+    )
     out.ignorados_spam = [_chave(s) for s in repetidos]
 
     enviou = False
@@ -428,12 +450,16 @@ def checar_e_avisar(
                 print(f"Enviado via: {', '.join(canais)}")
             except Exception as exc:  # noqa: BLE001
                 out.erros.append(str(exc))
+    elif todos:
+        print(
+            f"Sinais ativos={len(todos)}, mas já avisados hoje (BRT). "
+            "Use --force para reenviar."
+        )
 
     if enviou:
-        filtrar_novos(todos, state, registrar=True)
+        filtrar_novos(todos, state, registrar=True, forcar=forcar)
     else:
-        # Só limpa chaves que deixaram de estar baratas
-        filtrar_novos(todos, state, registrar=False)
+        filtrar_novos(todos, state, registrar=False, forcar=False)
 
     save_state(state, state_path)
     return out

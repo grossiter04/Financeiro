@@ -16,15 +16,17 @@ Abre em geral em `http://localhost:8501`.
 
 ## Alertas por e-mail (recomendado)
 
-Checagem em **horários estratégicos** no pregão da B3 (seg–sex):
+Checagem em **horários estratégicos** no pregão da B3 (seg–sex, fuso `America/Sao_Paulo`):
 
 | Horário (BRT) | Motivo |
 |---|---|
-| **10:05** | logo após a abertura |
-| **13:00** | meio do pregão (~3h depois) |
-| **16:00** | ~1h antes do fechamento (~17h) |
+| **10:07** | logo após a abertura |
+| **13:07** | meio do pregão (~3h depois) |
+| **16:07** | ~1h antes do fechamento (~17h) |
 
-Também dá para rodar manualmente em **Actions → Alertas de preço → Run workflow**.
+O GitHub às vezes **atrasa** o cron em alguns minutos. Se não aparecer na lista, rode **Run workflow** (deixe **force** ligado para garantir e-mail).
+
+Anti-spam: no máximo **1 e-mail por papel/critério por dia**. No dia seguinte, se ainda estiver barata, avisa de novo.
 
 ### 1. Senha de app do Gmail (exemplo)
 

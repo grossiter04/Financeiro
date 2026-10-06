@@ -1,4 +1,4 @@
-"""CLI: python -m calculadora.alertas_cli [--dry-run|--test-email]."""
+"""CLI: python -m calculadora.alertas_cli [--dry-run|--test-email|--force]."""
 
 from __future__ import annotations
 
@@ -18,6 +18,11 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Só imprime; não envia aviso",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignora anti-spam do dia e reenvia se houver sinais",
     )
     parser.add_argument(
         "--test-email",
@@ -47,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"E-mail de teste enviado para {smtp['para']}")
         return 0
 
-    result = checar_e_avisar(dry_run=args.dry_run)
+    result = checar_e_avisar(dry_run=args.dry_run, forcar=args.force)
     for e in result.erros:
         print(f"AVISO: {e}", file=sys.stderr)
     print(
@@ -57,7 +62,10 @@ def main(argv: list[str] | None = None) -> int:
     if result.enviados:
         print("Enviados:", ", ".join(result.enviados))
     elif result.sinais and not args.dry_run:
-        print("Houve sinais, mas o envio falhou — veja AVISO acima.", file=sys.stderr)
+        print(
+            "Houve sinais, mas já avisados hoje ou o envio falhou — veja log acima.",
+            file=sys.stderr,
+        )
     elif not result.sinais:
         print("Nenhuma ação barata agora — por isso não há e-mail.")
     return 0

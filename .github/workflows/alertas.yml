@@ -2,17 +2,23 @@ name: Alertas de preço
 
 on:
   schedule:
-    # Horários estratégicos (BRT = UTC−3), seg–sex:
-    # 10:05 abertura | 13:00 meio do pregão | 16:00 (~1h antes do fechamento ~17h)
-    - cron: "5 13 * * 1-5"
-    - cron: "0 16 * * 1-5"
-    - cron: "0 19 * * 1-5"
+    # Horários em America/Sao_Paulo (BRT). Minutos fora de :00 reduzem atraso do GitHub.
+    - cron: "7 10 * * 1-5"
+      timezone: America/Sao_Paulo
+    - cron: "7 13 * * 1-5"
+      timezone: America/Sao_Paulo
+    - cron: "7 16 * * 1-5"
+      timezone: America/Sao_Paulo
   workflow_dispatch:
     inputs:
       test_email:
         description: "Enviar e-mail de teste (valida SMTP)"
         type: boolean
         default: false
+      force:
+        description: "Forçar reenvio (ignora anti-spam do dia)"
+        type: boolean
+        default: true
 
 concurrency:
   group: alertas-preco
@@ -37,8 +43,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: alertas/state.json
-          key: alertas-state-${{ github.run_id }}
+          key: alertas-state-v2-${{ github.run_id }}
           restore-keys: |
+            alertas-state-v2-
             alertas-state-
 
       - name: Checar e avisar
@@ -51,9 +58,14 @@ jobs:
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m calculadora.alertas_cli
+        run: |
+          EXTRA=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            EXTRA="--force"
+          fi
+          python -m calculadora.alertas_cli $EXTRA
 
-      - name: E-mail de teste (só se TEST_EMAIL=1)
+      - name: E-mail de teste (só se marcado no Run workflow)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email == true }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -69,4 +81,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: alertas/state.json
-          key: alertas-state-${{ github.run_id }}
+          key: alertas-state-v2-${{ github.run_id }}

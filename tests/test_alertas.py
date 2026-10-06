@@ -41,20 +41,28 @@ avisar_graham = true
     assert b3.avisar_graham is True
 
 
-def test_filtrar_novos_anti_spam():
+def test_filtrar_novos_anti_spam_diario(monkeypatch):
+    from calculadora import alertas as mod
+
+    monkeypatch.setattr(mod, "_hoje_brt", lambda: "2026-10-06")
     state: dict = {"ativos": {}}
     s1 = Sinal("X", "bazin", 10.0, 12.0, -0.1, "ok")
+
     novos, rep = filtrar_novos([s1], state, registrar=True)
     assert len(novos) == 1 and not rep
+    assert state["ativos"]["X|bazin"]["dia"] == "2026-10-06"
 
     novos2, rep2 = filtrar_novos([s1], state, registrar=True)
     assert not novos2 and len(rep2) == 1
 
-    # Saiu do barato → limpa; depois volta → avisa de novo
-    filtrar_novos([], state, registrar=False)
-    assert "X|bazin" not in state["ativos"]
-    novos3, _ = filtrar_novos([s1], state, registrar=True)
-    assert len(novos3) == 1
+    # Dia seguinte → avisa de novo mesmo ainda barata
+    monkeypatch.setattr(mod, "_hoje_brt", lambda: "2026-10-07")
+    novos3, rep3 = filtrar_novos([s1], state, registrar=True)
+    assert len(novos3) == 1 and not rep3
+
+    # Force no mesmo dia
+    novos4, _ = filtrar_novos([s1], state, registrar=True, forcar=True)
+    assert len(novos4) == 1
 
 
 def test_formatar_mensagem():
