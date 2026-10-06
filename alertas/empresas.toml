@@ -1,0 +1,106 @@
+# Como o relatório de notícias reconhece cada empresa.
+# A chave é a raiz do ticker (PETR serve para PETR3 e PETR4).
+#
+#   nomes        → como a empresa aparece nas notícias (sem diferenciar maiúsculas)
+#   nomes_exatos → nomes ambíguos, só contam com essa grafia exata (ex.: "Vale" ≠ "vale a pena")
+#   setor        → usado para ligar notícias de juros, dólar, petróleo etc. à ação
+#   estatal      → true se notícias de eleição/governo afetam a empresa
+#   ignorar      → frases que parecem o nome mas não são (ex.: "Vale lembrar")
+#
+# Setores reconhecidos: bancos, seguros, energia, petroleo, mineracao, papel,
+# bolsa, industria, varejo, saneamento, telecom, saude, construcao, agro, outros.
+#
+# Ao adicionar uma ação nova na calculadora, acrescente um bloco aqui.
+# Sem bloco, o relatório só reconhece o ticker escrito na notícia (ex.: "PETR4").
+
+[ABCB]
+nomes = ["ABC Brasil", "Banco ABC"]
+setor = "bancos"
+
+[AURE]
+nomes = ["Auren"]
+setor = "energia"
+
+# "B3" sozinho é o nome da bolsa e aparece em quase toda notícia;
+# só conta quando fala da empresa.
+[B3SA]
+nomes = ["B3 S.A.", "ações da B3", "lucro da B3", "resultado da B3", "balanço da B3"]
+setor = "bolsa"
+
+[BBDC]
+nomes = ["Bradesco"]
+setor = "bancos"
+
+[BBSE]
+nomes = ["BB Seguridade"]
+setor = "seguros"
+estatal = true
+
+[BMGB]
+nomes = ["Banco BMG"]
+nomes_exatos = ["BMG"]
+setor = "bancos"
+
+[BRAP]
+nomes = ["Bradespar"]
+setor = "mineracao"
+
+[CMIG]
+nomes = ["Cemig"]
+setor = "energia"
+estatal = true
+
+[CPLE]
+nomes = ["Copel"]
+setor = "energia"
+
+[CXSE]
+nomes = ["Caixa Seguridade"]
+setor = "seguros"
+estatal = true
+
+[ISAE]
+nomes = ["ISA Energia", "ISA CTEEP", "CTEEP"]
+setor = "energia"
+
+[ITSA]
+nomes = ["Itaúsa", "Itausa"]
+setor = "bancos"
+
+[ITUB]
+nomes = ["Itaú Unibanco", "Itaú", "Itau Unibanco"]
+setor = "bancos"
+
+[KLBN]
+nomes = ["Klabin"]
+setor = "papel"
+
+[PETR]
+nomes = ["Petrobras", "Petrobrás"]
+setor = "petroleo"
+estatal = true
+
+[PSSA]
+nomes = ["Porto Seguro"]
+nomes_exatos = ["Porto"]
+setor = "seguros"
+
+[SANB]
+nomes = ["Santander"]
+setor = "bancos"
+
+[TAEE]
+nomes = ["Taesa"]
+setor = "energia"
+
+[VALE]
+nomes_exatos = ["Vale", "VALE"]
+setor = "mineracao"
+ignorar = [
+    "Vale a pena", "Vale lembrar", "Vale destacar", "Vale ressaltar", "Vale notar",
+    "Vale dizer", "Vale mencionar", "Vale do", "Vale da", "Vale ainda",
+]
+
+[WEGE]
+nomes_exatos = ["WEG"]
+setor = "industria"

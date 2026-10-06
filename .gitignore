@@ -13,6 +13,8 @@ build/
 
 # Estado runtime dos alertas (GitHub Actions cache)
 alertas/state.json
+alertas/relatorio.html
+relatorio.html
 
 # SQLite temporário; o banco principal (data/acoes.db) sobe de propósito
 *.db-wal

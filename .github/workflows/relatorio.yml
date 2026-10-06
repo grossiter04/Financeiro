@@ -1,0 +1,58 @@
+name: Relatório diário de notícias
+
+on:
+  schedule:
+    # 9h37 em America/Sao_Paulo, antes da abertura (10h). Minuto fora de :00/:30 reduz atraso do GitHub.
+    - cron: "37 9 * * 1-5"
+      timezone: America/Sao_Paulo
+  workflow_dispatch:
+    inputs:
+      sem_ia:
+        description: "Gerar sem IA (análise simples)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: relatorio-noticias
+  cancel-in-progress: false
+
+jobs:
+  relatorio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar deps
+        run: pip install -r requirements.txt
+
+      - name: Gerar e enviar relatório
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+        run: |
+          EXTRA=""
+          if [ "${{ inputs.sem_ia }}" = "true" ]; then
+            EXTRA="--sem-ia"
+          fi
+          python -m calculadora.relatorio_cli --out relatorio.html $EXTRA
+
+      - name: Guardar cópia do relatório
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-${{ github.run_id }}
+          path: relatorio.html
+          retention-days: 7
+          if-no-files-found: ignore

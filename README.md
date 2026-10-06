@@ -69,6 +69,35 @@ Também deixe `usar_banco_local = true` (já vem assim após o sync): no job, o 
 - Local: `python -m calculadora.alertas_cli --dry-run`
 - GitHub: **Actions → Alertas de preço → Run workflow**
 
+## Relatório diário de notícias
+
+Todo dia útil às **9h37** (antes da abertura) chega um e-mail separado com:
+
+- **Cenário do dia**: juros, dólar, Ibovespa, política e o que isso significa para a carteira.
+- **Suas ações**: preço, variação no dia e no mês, distância do teto Bazin e do preço de Graham, tendência (alta/queda/lateral) e sentimento das notícias.
+- **O que esperar de cada ação**: expectativa, riscos e links das notícias relacionadas.
+- **Notícias que podem mexer com a carteira**: impacto (positivo/negativo), relevância e quais ações afeta.
+
+Fontes (RSS): InfoMoney, InvestNews, Money Times, Seu Dinheiro, Investing.com, Valor Investe, Suno e E-Investidor. A lista fica em `FEEDS`, em `calculadora/noticias.py`.
+
+### IA (Gemini, gratuita)
+
+O texto analítico é escrito pelo Gemini, do Google. Sem a chave, o relatório chega mesmo assim, com uma análise automática mais simples.
+
+1. Acesse [Google AI Studio](https://aistudio.google.com/apikey) com sua conta Google.
+2. Clique em **Create API key** e copie a chave.
+3. No GitHub: **Settings → Secrets and variables → Actions → New repository secret**, nome `GEMINI_API_KEY`, cole a chave.
+4. (Opcional) Para trocar o modelo, crie uma *variable* (aba **Variables**) `GEMINI_MODEL`, por exemplo `gemini-2.5-flash-lite`.
+
+### Novas ações
+
+O relatório já usa todas as ações da watchlist. Para que ele reconheça a empresa pelo nome nas notícias (ex.: "Petrobras", não só "PETR4") e ligue notícias do setor, adicione um bloco em `alertas/empresas.toml`.
+
+### Testar
+
+- Local: `python -m calculadora.relatorio_cli --dry-run` (gera `alertas/relatorio.html` sem enviar)
+- GitHub: **Actions → Relatório diário de notícias → Run workflow**. Uma cópia do HTML fica em *Artifacts* da execução.
+
 ## Como usar a calculadora
 
 1. Na barra lateral: anos, método e critério do ano.

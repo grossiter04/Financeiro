@@ -274,12 +274,15 @@ def enviar_email(
     para: str,
     de: str | None = None,
     assunto: str = "Alerta: ação barata",
+    html: str | None = None,
 ) -> None:
     msg = EmailMessage()
     msg["Subject"] = assunto
     msg["From"] = de or user
     msg["To"] = para
     msg.set_content(texto)
+    if html:
+        msg.add_alternative(html, subtype="html")
 
     context = ssl.create_default_context()
     with smtplib.SMTP(host, port, timeout=30) as smtp:
