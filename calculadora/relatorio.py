@@ -42,7 +42,7 @@ from calculadora.noticias import (
 from calculadora.preco import fetch_historico
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-GEMINI_MODELOS_PADRAO = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
+GEMINI_MODELOS_PADRAO = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-flash-lite"]
 MAX_NOTICIAS_IA = 60
 
 _POSITIVAS = [
@@ -298,11 +298,14 @@ def _extrair_json(texto: str) -> dict:
     return json.loads(texto[inicio : fim + 1])
 
 
-def chamar_gemini(prompt: str, *, api_key: str, modelos: list[str], timeout: float = 120.0) -> tuple[dict, str]:
+def chamar_gemini(prompt: str, *, api_key: str, modelos: list[str], timeout: float = 240.0) -> tuple[dict, str]:
     erros: list[str] = []
     corpo = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingLevel": "low"},
+        },
     }
     with httpx.Client(timeout=timeout) as client:
         for modelo in modelos:
@@ -411,6 +414,10 @@ def gerar_relatorio(
             motor = modelo
         except Exception as exc:  # noqa: BLE001
             avisos.append(f"IA indisponível, usei análise simples: {exc}")
+            resumo = (
+                "A IA do Google não respondeu desta vez (detalhes em \"Avisos técnicos\", no fim). "
+                "Abaixo, a análise automática simples."
+            )
     elif usar_ia:
         avisos.append("GEMINI_API_KEY não configurada: análise simples, sem IA.")
 

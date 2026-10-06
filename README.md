@@ -87,7 +87,7 @@ O texto analítico é escrito pelo Gemini, do Google. Sem a chave, o relatório 
 1. Acesse [Google AI Studio](https://aistudio.google.com/apikey) com sua conta Google.
 2. Clique em **Create API key** e copie a chave.
 3. No GitHub: **Settings → Secrets and variables → Actions → New repository secret**, nome `GEMINI_API_KEY`, cole a chave.
-4. (Opcional) Para trocar o modelo, crie uma *variable* (aba **Variables**) `GEMINI_MODEL`, por exemplo `gemini-2.5-flash-lite`.
+4. (Opcional) Para trocar o modelo, crie uma *variable* (aba **Variables**) `GEMINI_MODEL`, por exemplo `gemini-3.5-flash-lite`. Sem ela, tenta `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.8-flash` e `gemini-3.1-flash-lite`, nessa ordem.
 
 ### Novas ações
 

@@ -7,10 +7,10 @@ on:
       timezone: America/Sao_Paulo
   workflow_dispatch:
     inputs:
-      sem_ia:
-        description: "Gerar sem IA (análise simples)"
+      com_ia:
+        description: "Usar IA (Gemini) na análise"
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: relatorio-noticias
@@ -43,7 +43,7 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
         run: |
           EXTRA=""
-          if [ "${{ inputs.sem_ia }}" = "true" ]; then
+          if [ "${{ inputs.com_ia }}" = "false" ]; then
             EXTRA="--sem-ia"
           fi
           python -m calculadora.relatorio_cli --out relatorio.html $EXTRA
