@@ -24,7 +24,7 @@ Checagem em **horários estratégicos** no pregão da B3 (seg–sex, fuso `Ameri
 | **13:07** | meio do pregão (~3h depois) |
 | **16:07** | ~1h antes do fechamento (~17h) |
 
-O GitHub às vezes **atrasa** o cron em alguns minutos. Se não aparecer na lista, rode **Run workflow** (deixe **force** ligado para garantir e-mail).
+O cron nativo do GitHub é **melhor esforço** (pode atrasar ou pular). Para disparos confiáveis, use o agendador externo abaixo. Os horários do próprio GitHub ficam como reserva.
 
 Anti-spam: no máximo **1 e-mail por papel/critério por dia**. No dia seguinte, se ainda estiver barata, avisa de novo.
 
@@ -68,6 +68,45 @@ Também deixe `usar_banco_local = true` (já vem assim após o sync): no job, o 
 
 - Local: `python -m calculadora.alertas_cli --dry-run`
 - GitHub: **Actions → Alertas de preço → Run workflow**
+
+### 5. Despertador confiável (cron-job.org) — alertas **e** notícias
+
+São **4 jobs** no total (não só os de preço):
+
+| Job | Horário (BRT) | Workflow |
+|---|---|---|
+| Notícias | **09:37** | Relatório diário de notícias |
+| Preços abertura | **10:07** | Alertas de preço |
+| Preços meio | **13:07** | Alertas de preço |
+| Preços pré-fechamento | **16:07** | Alertas de preço |
+
+#### A) Token no GitHub (uma vez)
+
+1. [Fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
+2. Resource owner: sua conta · Repository access: **Only select repositories** → `Financeiro`
+3. Permissions → Repository → **Actions: Read and write**
+4. Generate e **copie o token** (só aparece uma vez). Não cole no chat.
+
+#### B) Conta em [cron-job.org](https://cron-job.org)
+
+Crie 4 jobs. Em cada um:
+
+- **Title:** ex. `Financeiro notícias 09:37`
+- **URL:**  
+  - Notícias: `https://api.github.com/repos/grossiter04/Financeiro/actions/workflows/relatorio.yml/dispatches`  
+  - Preços: `https://api.github.com/repos/grossiter04/Financeiro/actions/workflows/alertas.yml/dispatches`
+- **Schedule:** o horário da tabela, fuso **America/Sao_Paulo**, dias **seg–sex**
+- **Request method:** `POST`
+- **Request headers:**
+  - `Accept: application/vnd.github+json`
+  - `Authorization: Bearer SEU_TOKEN_AQUI`
+  - `X-GitHub-Api-Version: 2022-11-28`
+  - `Content-Type: application/json`
+- **Request body:**
+  - Notícias: `{"ref":"main","inputs":{"com_ia":"true"}}`
+  - Preços: `{"ref":"main","inputs":{"force":"true","test_email":"false"}}`
+
+Depois de salvar, use **“Run now”** em um job para validar (deve aparecer em Actions e o e-mail chegar).
 
 ## Relatório diário de notícias
 
