@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from calculadora.alertas import _BRT
+from calculadora.mail import BRT
 from calculadora.noticias import Noticia
 from calculadora.relatorio import (
     MetricaAcao,
@@ -67,7 +67,7 @@ def test_extrair_json_com_cercas():
 def test_renderiza_html_e_texto():
     metricas, noticias = _dados()
     an_not, an_acoes, resumo = analise_por_regras(metricas, noticias)
-    rel = Relatorio(datetime(2026, 10, 6, 9, 37, tzinfo=_BRT), metricas, noticias, an_not, an_acoes, resumo)
+    rel = Relatorio(datetime(2026, 10, 6, 9, 37, tzinfo=BRT), metricas, noticias, an_not, an_acoes, resumo)
     html = renderizar_html(rel)
     assert "PETR4" in html and "https://ex.com/1" in html and "<table" in html
     texto = renderizar_texto(rel)

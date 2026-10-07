@@ -11,8 +11,7 @@ dist/
 build/
 .streamlit/secrets.toml
 
-# Estado runtime dos alertas (GitHub Actions cache)
-alertas/state.json
+# Relatório gerado localmente
 alertas/relatorio.html
 relatorio.html
 

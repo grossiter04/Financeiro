@@ -15,7 +15,6 @@ def resolve_db_path(db_path: Path | None = None) -> Path:
     """
     Resolve o caminho do SQLite.
     Ordem: argumento explícito → DB_PATH → DATA_DIR/acoes.db → data/ local.
-    No Railway, monte o volume em /app/data e defina DATA_DIR=/app/data.
     """
     if db_path is not None:
         return Path(db_path)

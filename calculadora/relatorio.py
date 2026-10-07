@@ -13,14 +13,6 @@ from pathlib import Path
 
 import httpx
 
-from calculadora.alertas import (
-    _BRT,
-    WatchItem,
-    _smtp_config_from_env,
-    _texto_proventos,
-    enviar_email,
-    load_watchlist,
-)
 from calculadora.core import (
     BAZIN_DY,
     BaseMethod,
@@ -30,6 +22,7 @@ from calculadora.core import (
     conta_graham,
 )
 from calculadora.fundamentos import fetch_fundamentos
+from calculadora.mail import BRT, agora_brt, enviar_email, smtp_config_from_env
 from calculadora.noticias import (
     Empresa,
     Noticia,
@@ -40,6 +33,8 @@ from calculadora.noticias import (
     raiz_ticker,
 )
 from calculadora.preco import fetch_historico
+from calculadora.proventos_fetch import fetch_proventos
+from calculadora.storage import listar_acoes, obter_acao
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GEMINI_MODELOS_PADRAO = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-flash-lite"]
@@ -53,6 +48,13 @@ _NEGATIVAS = [
     "queda", "cai ", "caiu", "despenca", "recua", "prejuizo", "rebaix", "multa",
     "investigacao", "greve", "corta", "downgrade", "pessimis", "risco", "perde", "tomba",
 ]
+
+
+@dataclass
+class ItemCarteira:
+    ticker: str
+    dy_desejado: float = 6.0
+    n_anos: int = 5
 
 
 @dataclass
@@ -71,6 +73,14 @@ class MetricaAcao:
     pct_dy: float | None = None
     dy_desejado: float = 6.0
     erros: list[str] = field(default_factory=list)
+
+
+def _texto_proventos(ticker: str, *, timeout: float) -> tuple[str, str]:
+    salva = obter_acao(ticker)
+    if salva is not None and salva.proventos.strip():
+        return salva.proventos, "banco local"
+    got = fetch_proventos(ticker, timeout=timeout)
+    return got.texto, got.fonte
 
 
 @dataclass
@@ -105,7 +115,7 @@ class Relatorio:
     avisos: list[str] = field(default_factory=list)
 
 
-def calcular_metricas(item: WatchItem, empresa: Empresa | None) -> MetricaAcao:
+def calcular_metricas(item: ItemCarteira, empresa: Empresa | None) -> MetricaAcao:
     m = MetricaAcao(
         ticker=item.ticker,
         nome=empresa.nome_principal if empresa else item.ticker,
@@ -377,17 +387,34 @@ def _aplicar_ia(
 # ---------- montagem ----------
 
 
+def _itens_carteira() -> list[ItemCarteira]:
+    return [
+        ItemCarteira(ticker=a.ticker, dy_desejado=float(a.dy or 6.0))
+        for a in listar_acoes()
+    ]
+
+
 def gerar_relatorio(
     *,
-    watchlist_path: Path | None = None,
     empresas_path: Path | None = None,
     usar_ia: bool = True,
     horas: int = 36,
 ) -> Relatorio:
-    agora = datetime.now(_BRT)
-    itens = load_watchlist(watchlist_path)
+    agora = agora_brt()
+    itens = _itens_carteira()
     empresas = load_empresas(empresas_path)
     tickers = [i.ticker for i in itens]
+    if not tickers:
+        return Relatorio(
+            gerado_em=agora,
+            metricas=[],
+            noticias=[],
+            analise_noticias={},
+            analise_acoes={},
+            resumo_mercado="Nenhuma ação salva no banco. Cadastre tickers na calculadora antes de gerar o relatório.",
+            motor="regras",
+            avisos=["Carteira vazia."],
+        )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         futuro_noticias = pool.submit(buscar_noticias, horas=horas)
@@ -558,7 +585,7 @@ def renderizar_html(rel: Relatorio) -> str:
     h.append("<h3>Notícias que podem mexer com a carteira</h3>")
     for n in _noticias_ordenadas(rel):
         an = rel.analise_noticias[n.id]
-        hora = n.publicado.astimezone(_BRT).strftime("%d/%m %H:%M") if n.publicado else ""
+        hora = n.publicado.astimezone(BRT).strftime("%d/%m %H:%M") if n.publicado else ""
         h.append(
             '<div style="padding:8px 0;border-bottom:1px solid #e2e8f0">'
             f'<a href="{_e(n.link)}" style="font-weight:600;color:#1d4ed8">{_e(n.titulo)}</a><br>'
@@ -609,7 +636,7 @@ def renderizar_texto(rel: Relatorio) -> str:
 
 
 def enviar_relatorio(rel: Relatorio) -> None:
-    smtp = _smtp_config_from_env()
+    smtp = smtp_config_from_env()
     if not smtp:
         raise ValueError("Configure SMTP_HOST, SMTP_USER, SMTP_PASSWORD e ALERT_EMAIL_TO.")
     enviar_email(

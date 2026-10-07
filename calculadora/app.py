@@ -38,6 +38,8 @@ from calculadora.empresa import EmpresaInfo, fetch_empresa
 from calculadora.fundamentos import Fundamentos, fetch_fundamentos
 from calculadora.preco import RANGES_HISTORICO, fetch_historico, fetch_preco, logo_url
 from calculadora.proventos_fetch import fetch_proventos
+from calculadora.mail import apply_runtime_secrets, smtp_config_from_env
+from calculadora.relatorio import enviar_relatorio, gerar_relatorio
 from calculadora.storage import excluir_acao, listar_acoes, obter_acao, salvar_acao
 from calculadora.tab_bar import browser_tabs
 
@@ -1100,6 +1102,54 @@ def main() -> None:
                 msg += f" | falhas: {'; '.join(erros[:3])}"
             st.session_state.auto_preco_status = msg
             st.rerun()
+
+        st.divider()
+        st.subheader("Relatório de notícias")
+        st.caption(
+            "Lê sites de investimento, analisa as ações salvas e envia o relatório por e-mail."
+        )
+        usar_ia = st.checkbox(
+            "Usar IA (Gemini)",
+            value=True,
+            key="relatorio_usar_ia",
+            help="Desligue para análise automática simples, sem chamar a IA.",
+        )
+        apply_runtime_secrets(getattr(st, "secrets", None))
+        smtp_ok = smtp_config_from_env() is not None
+        if not smtp_ok:
+            st.warning(
+                "E-mail ainda não configurado. Crie `.streamlit/secrets.toml` "
+                "com SMTP_HOST, SMTP_USER, SMTP_PASSWORD e ALERT_EMAIL_TO."
+            )
+        if st.button(
+            "Gerar e enviar por e-mail",
+            use_container_width=True,
+            disabled=not smtp_ok,
+            key="btn_relatorio_noticias",
+        ):
+            with st.spinner(
+                "Buscando notícias e montando o relatório… isso pode levar 1–3 minutos."
+            ):
+                try:
+                    apply_runtime_secrets(getattr(st, "secrets", None))
+                    rel = gerar_relatorio(usar_ia=bool(usar_ia))
+                    enviar_relatorio(rel)
+                    st.session_state.relatorio_msg = (
+                        f"Enviado ({rel.motor}): {len(rel.metricas)} ações, "
+                        f"{len(rel.noticias)} notícias relevantes."
+                    )
+                    st.session_state.relatorio_erros = list(rel.avisos[:8])
+                except Exception as exc:  # noqa: BLE001
+                    st.session_state.relatorio_msg = ""
+                    st.session_state.relatorio_erros = [str(exc)]
+            st.rerun()
+
+        msg_rel = st.session_state.get("relatorio_msg") or ""
+        erros_rel = st.session_state.get("relatorio_erros") or []
+        if msg_rel:
+            st.success(msg_rel)
+        for err in erros_rel:
+            st.caption(f"Aviso: {err}")
 
         st.divider()
         if st.button("+ Nova aba vazia"):
