@@ -20,6 +20,7 @@ from calculadora.core import (
     parse_proventos,
     preco_graham,
     preco_teto_bazin,
+    resumo_datas_com,
     selecionar_anos,
 )
 
@@ -335,3 +336,19 @@ def test_graham_numero():
 def test_graham_lpa_negativo():
     with pytest.raises(ValueError):
         preco_graham(-1.0, 10.0)
+
+
+def test_resumo_datas_com_proxima_e_ultima():
+    resumo = resumo_datas_com(EXEMPLO, hoje=date(2026, 6, 1))
+    assert resumo.ultima == date(2026, 5, 11)
+    assert resumo.proxima == date(2026, 8, 14)
+    assert resumo.fmt_ultima() == "11/05/2026"
+    assert resumo.fmt_proxima() == "14/08/2026"
+    assert "próx." in resumo.fmt_destaque()
+
+
+def test_resumo_datas_com_vazio():
+    resumo = resumo_datas_com("")
+    assert resumo.ultima is None
+    assert resumo.proxima is None
+    assert resumo.fmt_destaque() == "—"

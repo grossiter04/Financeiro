@@ -78,6 +78,10 @@ TEMAS: dict[str, tuple[list[str], list[str]]] = {
     ),
     "seguros": (["susep", "seguradora"], ["seguros"]),
     "celulose": (["celulose", "papelao"], ["papel"]),
+    "telecom": (
+        ["anatel", "5g", "telefonia", "operadora de celular", "banda larga"],
+        ["telecom"],
+    ),
     "Ibovespa": (["ibovespa"], ["bolsa"]),
 }
 

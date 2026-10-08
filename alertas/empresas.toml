@@ -12,6 +12,9 @@
 #
 # Ao adicionar uma ação nova na calculadora, acrescente um bloco aqui.
 # Sem bloco, o relatório só reconhece o ticker escrito na notícia (ex.: "PETR4").
+#
+# Prioridade desta carteira: setores perenes já usados (bancos, seguros, energia,
+# petróleo, mineração, papel, bolsa) + peers líquidos do mesmo setor.
 
 [ABCB]
 nomes = ["ABC Brasil", "Banco ABC"]
@@ -26,6 +29,12 @@ setor = "energia"
 [B3SA]
 nomes = ["B3 S.A.", "ações da B3", "lucro da B3", "resultado da B3", "balanço da B3"]
 setor = "bolsa"
+
+[BBAS]
+nomes = ["Banco do Brasil"]
+nomes_exatos = ["BB"]
+setor = "bancos"
+estatal = true
 
 [BBDC]
 nomes = ["Bradesco"]
@@ -45,10 +54,23 @@ setor = "bancos"
 nomes = ["Bradespar"]
 setor = "mineracao"
 
+[BRSR]
+nomes = ["Banrisul", "Banco do Estado do Rio Grande do Sul"]
+setor = "bancos"
+estatal = true
+
 [CMIG]
 nomes = ["Cemig"]
 setor = "energia"
 estatal = true
+
+[CMIN]
+nomes = ["CSN Mineração", "CSN Mineracao"]
+setor = "mineracao"
+
+[CPFE]
+nomes = ["CPFL", "CPFL Energia"]
+setor = "energia"
 
 [CPLE]
 nomes = ["Copel"]
@@ -58,6 +80,23 @@ setor = "energia"
 nomes = ["Caixa Seguridade"]
 setor = "seguros"
 estatal = true
+
+[EGIE]
+nomes = ["Engie Brasil", "Engie"]
+setor = "energia"
+
+[ELET]
+nomes = ["Eletrobras", "Eletrobrás"]
+setor = "energia"
+estatal = true
+
+[ENGI]
+nomes = ["Energisa"]
+setor = "energia"
+
+[EQTL]
+nomes = ["Equatorial", "Equatorial Energia"]
+setor = "energia"
 
 [ISAE]
 nomes = ["ISA Energia", "ISA CTEEP", "CTEEP"]
@@ -75,10 +114,18 @@ setor = "bancos"
 nomes = ["Klabin"]
 setor = "papel"
 
+[NEOE]
+nomes = ["Neoenergia"]
+setor = "energia"
+
 [PETR]
 nomes = ["Petrobras", "Petrobrás"]
 setor = "petroleo"
 estatal = true
+
+[PRIO]
+nomes = ["Prio", "PRIO", "PetroRio", "Petro Rio"]
+setor = "petroleo"
 
 [PSSA]
 nomes = ["Porto Seguro"]
@@ -89,9 +136,31 @@ setor = "seguros"
 nomes = ["Santander"]
 setor = "bancos"
 
+[SULA]
+nomes = ["SulAmérica", "SulAmerica", "Sul América"]
+setor = "seguros"
+
+[SUZB]
+nomes = ["Suzano"]
+setor = "papel"
+
 [TAEE]
 nomes = ["Taesa"]
 setor = "energia"
+
+[TIMS]
+nomes = ["TIM Brasil", "TIM S.A."]
+nomes_exatos = ["TIM"]
+setor = "telecom"
+
+[UGPA]
+nomes = ["Ultrapar", "Ultragaz", "Ipiranga"]
+setor = "petroleo"
+
+[VIVT]
+nomes = ["Telefônica Brasil", "Telefonica Brasil", "Telefônica", "Telefonica"]
+nomes_exatos = ["Vivo"]
+setor = "telecom"
 
 [VALE]
 nomes_exatos = ["Vale", "VALE"]

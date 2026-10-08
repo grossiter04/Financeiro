@@ -157,6 +157,49 @@ def aliquota_jcp(ref: date, faixas: Sequence[AliquotaFaixa] | None = None) -> fl
 
 
 # ---------------------------------------------------------------------------
+# Datas-com (próxima / última)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DatasComResumo:
+    ultima: date | None = None
+    proxima: date | None = None
+
+    def fmt_ultima(self) -> str:
+        return self.ultima.strftime("%d/%m/%Y") if self.ultima else "—"
+
+    def fmt_proxima(self) -> str:
+        return self.proxima.strftime("%d/%m/%Y") if self.proxima else "—"
+
+    def fmt_destaque(self) -> str:
+        """Prefere a próxima; se não houver, a última."""
+        if self.proxima:
+            return f"próx. {self.fmt_proxima()}"
+        if self.ultima:
+            return f"últ. {self.fmt_ultima()}"
+        return "—"
+
+
+def resumo_datas_com(
+    proventos_texto: str,
+    *,
+    hoje: date | None = None,
+) -> DatasComResumo:
+    """Extrai última e próxima data-com a partir do texto de proventos."""
+    if not (proventos_texto or "").strip():
+        return DatasComResumo()
+    proventos, _ = parse_proventos(proventos_texto)
+    if not proventos:
+        return DatasComResumo()
+    ref = hoje or date.today()
+    datas = sorted({p.data_com for p in proventos})
+    ultima = max((d for d in datas if d <= ref), default=None)
+    proxima = min((d for d in datas if d > ref), default=None)
+    return DatasComResumo(ultima=ultima, proxima=proxima)
+
+
+# ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
 
