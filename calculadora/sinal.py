@@ -1,9 +1,14 @@
-"""Sinal orientativo: valuation (Bazin/Graham) + sentimento de notícias."""
+"""Sinal orientativo: wrapper da avaliação unificada + fila."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from calculadora.avaliacao import (
+    IPCA_MAIS_PADRAO,
+    SELIC_PADRAO,
+    montar_avaliacao,
+)
 from calculadora.core import (
     BAZIN_DY,
     BaseMethod,
@@ -14,12 +19,14 @@ from calculadora.core import (
     conta_graham,
     resumo_datas_com,
 )
+from calculadora.fundamentos import Fundamentos
+from calculadora.setores import normalizar_setor
 
-# Código → rótulo curto (fila / badge) — tom neutro, sem ordem de trade
+# Código → rótulo curto (fila / badge)
 SINAIS = {
-    "compra": "Atrativa",
-    "aguardar": "Neutra",
-    "cautela": "Esticada",
+    "compra": "Comprar",
+    "aguardar": "Esperar",
+    "cautela": "Evitar",
     "sem_dados": "Sem dados",
 }
 
@@ -30,7 +37,6 @@ _CORES = {
     "sem_dados": "#6b7280",
 }
 
-# Percentuais absurdos (dados fracos / empresa sem DY) não entram no score
 _PCT_MAX_UTIL = 1.50  # ±150%
 
 
@@ -72,19 +78,6 @@ def _pontos_margem(pct: float | None) -> float | None:
     return -2.0
 
 
-def _pontos_sentimento(sentimento: str | None) -> float | None:
-    if not sentimento:
-        return None
-    s = sentimento.strip().lower()
-    if s == "positivo":
-        return 1.0
-    if s == "negativo":
-        return -1.0
-    if s in ("neutro", "misto", "lateral"):
-        return 0.0
-    return None
-
-
 def formatar_margem_pct(pct: float | None) -> str:
     """Texto curto para UI; evita números absurdos."""
     if pct is None:
@@ -94,82 +87,51 @@ def formatar_margem_pct(pct: float | None) -> str:
     return f"{pct * 100:+.0f}%"
 
 
-def _rotulo_margem(pct: float | None, nome: str) -> str | None:
-    if pct is None:
-        return None
-    if abs(pct) > _PCT_MAX_UTIL:
-        extremo = "muito acima" if pct > 0 else "muito abaixo"
-        return f"{nome} {extremo} (dado fraco)"
-    lado = "abaixo" if pct < 0 else "acima"
-    return f"{nome} {abs(pct) * 100:.0f}% {lado}"
-
-
-# Valuation domina; notícias só entram com evidência direta e peso baixo.
-_PESO_VALUATION = 0.85
-_PESO_NOTICIAS = 0.15
-
-
 def calcular_sinal(
     *,
     pct_bazin: float | None = None,
     pct_graham: float | None = None,
     sentimento: str | None = None,
     usar_sentimento: bool = False,
+    ticker: str = "—",
+    preco: float = 0.0,
+    proventos: str = "",
+    selic: float = SELIC_PADRAO,
+    ipca_mais: float = IPCA_MAIS_PADRAO,
+    pl: float | None = None,
+    payout: float | None = None,
+    fund: Fundamentos | None = None,
+    setor: str = "",
+    peso_setor_carteira: float | None = None,
 ) -> SinalOrientativo:
     """
-    Combina valuation e (opcionalmente) sentimento de notícias.
+    Combina valuation e (opcionalmente) sentimento via motor unificado.
 
-    - Valuation: média dos pontos Bazin/Graham disponíveis (peso 85%).
-    - Notícias: só com ``usar_sentimento=True`` e citação direta (peso 15%).
-    - Faixas mais conservadoras: atrativa (≥ +1.0), esticada (≤ −1.5),
-      senão neutra. Códigos internos: compra / cautela / aguardar.
+    Mantém a assinatura clássica (Bazin/Graham ± notícias) e aceita fundamentos
+    extras quando disponíveis.
     """
-    pts_val = [p for p in (_pontos_margem(pct_bazin), _pontos_margem(pct_graham)) if p is not None]
-    pts_sent = _pontos_sentimento(sentimento) if usar_sentimento else None
-
-    if not pts_val and pts_sent is None:
-        return SinalOrientativo(
-            codigo="sem_dados",
-            rotulo=SINAIS["sem_dados"],
-            score=0.0,
-            resumo="Sem Bazin/Graham utilizável nem notícias diretas.",
-        )
-
-    partes: list[str] = []
-    for pct, nome in ((pct_bazin, "Bazin"), (pct_graham, "Graham")):
-        r = _rotulo_margem(pct, nome)
-        if r:
-            partes.append(r)
-
-    if pts_val and pts_sent is not None:
-        score = _PESO_VALUATION * (sum(pts_val) / len(pts_val)) + _PESO_NOTICIAS * pts_sent
-        partes.append(f"notícias {sentimento}")
-    elif pts_val:
-        score = sum(pts_val) / len(pts_val)
-    else:
-        score = float(pts_sent or 0.0)
-        if sentimento:
-            partes.append(f"notícias {sentimento}")
-
-    # Limiares menos agressivos: só extremos saem do neutro
-    if score >= 1.0:
-        codigo = "compra"
-    elif score <= -1.5:
-        codigo = "cautela"
-    else:
-        codigo = "aguardar"
-
-    detalhe = (
-        "Leitura suave vs Bazin/Graham"
-        + (" e notícias diretas." if pts_sent is not None else ".")
-        + " Indicativo — não é recomendação de investimento."
+    av = montar_avaliacao(
+        ticker=ticker,
+        preco=preco if preco > 0 else 1.0,  # evita divisão zero em DY se só margens
+        proventos=proventos,
+        pct_bazin=pct_bazin,
+        pct_graham=pct_graham,
+        selic=selic,
+        ipca_mais=ipca_mais,
+        pl=pl,
+        payout=payout,
+        fund=fund,
+        setor=normalizar_setor(setor) if setor else "",
+        peso_setor_carteira=peso_setor_carteira,
+        sentimento=sentimento,
+        usar_sentimento=usar_sentimento,
     )
     return SinalOrientativo(
-        codigo=codigo,
-        rotulo=SINAIS[codigo],
-        score=round(score, 2),
-        resumo="; ".join(partes) if partes else SINAIS[codigo],
-        detalhe=detalhe,
+        codigo=av.decisao,
+        rotulo=av.rotulo,
+        score=av.score,
+        resumo=av.resumo,
+        detalhe=av.detalhe,
     )
 
 
@@ -214,8 +176,11 @@ def item_fila_de_salva(
     sentimento: str | None = None,
     setor: str = "outros",
     n_anos: int = 5,
+    fund: Fundamentos | None = None,
+    selic: float = SELIC_PADRAO,
+    ipca_mais: float = IPCA_MAIS_PADRAO,
 ) -> ItemFila:
-    """Monta item da fila a partir dos dados salvos (sem rede, salvo LPA/VPA opcionais)."""
+    """Monta item da fila a partir dos dados salvos (sem rede, salvo fundamentos opcionais)."""
     pct_bazin: float | None = None
     pct_graham: float | None = None
     t = (ticker or "").strip().upper()
@@ -237,9 +202,11 @@ def item_fila_de_salva(
                 pct_bazin = baz.diferenca
         except Exception:  # noqa: BLE001
             pass
-    if lpa is not None and vpa is not None and lpa > 0 and vpa > 0 and preco > 0:
+    lpa_u = lpa if lpa is not None else (fund.lpa if fund else None)
+    vpa_u = vpa if vpa is not None else (fund.vpa if fund else None)
+    if lpa_u is not None and vpa_u is not None and lpa_u > 0 and vpa_u > 0 and preco > 0:
         try:
-            gra = conta_graham(lpa, vpa, preco)
+            gra = conta_graham(lpa_u, vpa_u, preco)
             pct_graham = gra.diferenca
         except Exception:  # noqa: BLE001
             pass
@@ -248,6 +215,15 @@ def item_fila_de_salva(
         pct_graham=pct_graham,
         sentimento=sentimento,
         usar_sentimento=bool(sentimento),
+        ticker=t or "—",
+        preco=float(preco or 0),
+        proventos=proventos,
+        fund=fund,
+        setor=setor or "outros",
+        selic=selic,
+        ipca_mais=ipca_mais,
+        pl=fund.pl if fund else None,
+        payout=fund.payout if fund else None,
     )
     return ItemFila(
         ticker=t or "—",

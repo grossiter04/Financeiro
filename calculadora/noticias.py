@@ -94,10 +94,19 @@ class Empresa:
     setor: str = "outros"
     estatal: bool = False
     ignorar: list[str] = field(default_factory=list)
+    # Ticker preferencial na Calculadora (ex.: CSMG3, SAPR11). Sem isso: raiz + "3".
+    ticker: str = ""
 
     @property
     def nome_principal(self) -> str:
         return (self.nomes or self.nomes_exatos or [self.raiz])[0]
+
+    @property
+    def ticker_preferencial(self) -> str:
+        t = (self.ticker or "").strip().upper()
+        if t:
+            return t
+        return f"{self.raiz}3"
 
 
 @dataclass
@@ -157,8 +166,59 @@ def load_empresas(path: Path | None = None) -> dict[str, Empresa]:
             setor=str(raw.get("setor") or "outros"),
             estatal=bool(raw.get("estatal", False)),
             ignorar=[str(n) for n in raw.get("ignorar") or []],
+            ticker=str(raw.get("ticker") or "").strip().upper(),
         )
     return out
+
+
+def _toml_escapar(texto: str) -> str:
+    return (texto or "").replace("\\", "\\\\").replace('"', '\\"')
+
+
+def garantir_empresa_toml(
+    ticker: str,
+    *,
+    nome: str = "",
+    setor: str = "outros",
+    path: Path | None = None,
+) -> bool:
+    """
+    Se a raiz do ticker não estiver em empresas.toml, acrescenta um bloco.
+
+    Devolve True se gravou. Usado ao abrir/salvar ação nova na Calculadora
+    para o agrupamento por setor não cair em Outros.
+    """
+    from calculadora.setores import ORDEM_SETORES, normalizar_setor
+
+    path = path or DEFAULT_EMPRESAS
+    raiz = raiz_ticker(ticker)
+    if not raiz or raiz == "EXEMPLO":
+        return False
+    existentes = load_empresas(path)
+    if raiz in existentes:
+        return False
+
+    chave = normalizar_setor(setor)
+    if chave not in ORDEM_SETORES:
+        chave = "outros"
+
+    nome_limpo = " ".join((nome or "").split())
+    # remove sufixos jurídicos comuns para matching de notícias
+    for suf in (" S.A.", " S/A", " SA", " S.A"):
+        if nome_limpo.upper().endswith(suf.strip().upper()):
+            nome_limpo = nome_limpo[: -len(suf)].strip()
+            break
+
+    linhas = ["", f"[{raiz}]"]
+    if nome_limpo:
+        linhas.append(f'nomes = ["{_toml_escapar(nome_limpo)}"]')
+    linhas.append(f'setor = "{chave}"')
+    linhas.append("")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write("\n".join(linhas))
+    return True
 
 
 def _parse_data(raw: str | None) -> datetime | None:

@@ -4,6 +4,7 @@
 #   nomes        → como a empresa aparece nas notícias (sem diferenciar maiúsculas)
 #   nomes_exatos → nomes ambíguos, só contam com essa grafia exata (ex.: "Vale" ≠ "vale a pena")
 #   setor        → usado para ligar notícias de juros, dólar, petróleo etc. à ação
+#   ticker       → papel preferencial na Calculadora/catálogo (ex.: CSMG3, SAPR11)
 #   estatal      → true se notícias de eleição/governo afetam a empresa
 #   ignorar      → frases que parecem o nome mas não são (ex.: "Vale lembrar")
 #
@@ -81,6 +82,12 @@ nomes = ["Caixa Seguridade"]
 setor = "seguros"
 estatal = true
 
+[CSMG]
+nomes = ["Copasa", "COPASA"]
+setor = "saneamento"
+ticker = "CSMG3"
+estatal = true
+
 [EGIE]
 nomes = ["Engie Brasil", "Engie"]
 setor = "energia"
@@ -136,6 +143,18 @@ setor = "seguros"
 nomes = ["Santander"]
 setor = "bancos"
 
+[SAPR]
+nomes = ["Sanepar"]
+setor = "saneamento"
+ticker = "SAPR11"
+estatal = true
+
+[SBSP]
+nomes = ["Sabesp"]
+setor = "saneamento"
+ticker = "SBSP3"
+estatal = true
+
 [SULA]
 nomes = ["SulAmérica", "SulAmerica", "Sul América"]
 setor = "seguros"
@@ -172,4 +191,8 @@ ignorar = [
 
 [WEGE]
 nomes_exatos = ["WEG"]
+setor = "industria"
+
+[POMO]
+nomes = ["Marcopolo"]
 setor = "industria"

@@ -1,0 +1,39 @@
+# Relatório de notícias por e-mail ~15 min antes da abertura da B3 (10:00 BRT).
+# Secrets: SMTP_HOST, SMTP_USER, SMTP_PASSWORD, ALERT_EMAIL_TO
+# Opcionais: SMTP_PORT, SMTP_FROM, GEMINI_API_KEY, GEMINI_MODEL
+name: Relatório abertura
+
+on:
+  schedule:
+    # 9:45 America/Sao_Paulo = 12:45 UTC (BRT sem horário de verão)
+    - cron: "45 12 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dependências
+        run: pip install -r requirements.txt
+
+      - name: Gerar e enviar
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+        run: python scripts/enviar_relatorio.py

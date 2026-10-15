@@ -24,11 +24,56 @@ from calculadora.proventos_fetch import fetch_proventos
 from calculadora.storage import (
     PosicaoSalva,
     excluir_posicao,
+    listar_posicoes,
     obter_acao,
     obter_posicao,
     salvar_acao,
     salvar_posicao,
+    substituir_posicoes,
 )
+
+# Snapshot = lista (ticker, quantidade, preco_medio)
+SnapshotCarteira = list[tuple[str, float, float]]
+_UNDO_MAX = 15
+
+
+def snapshot_posicoes(db_path: Path | None = None) -> SnapshotCarteira:
+    """Cópia atual das posições para pilha de desfazer."""
+    return [
+        (p.ticker, float(p.quantidade), float(p.preco_medio))
+        for p in listar_posicoes(db_path=db_path)
+    ]
+
+
+def push_undo_carteira(
+    historico: list[SnapshotCarteira] | None,
+    *,
+    db_path: Path | None = None,
+    limite: int = _UNDO_MAX,
+) -> list[SnapshotCarteira]:
+    """Empilha o estado atual antes de uma alteração. Devolve a nova pilha."""
+    hist = list(historico or [])
+    hist.append(snapshot_posicoes(db_path=db_path))
+    if len(hist) > limite:
+        hist = hist[-limite:]
+    return hist
+
+
+def desfazer_carteira(
+    historico: list[SnapshotCarteira] | None,
+    *,
+    db_path: Path | None = None,
+) -> tuple[list[SnapshotCarteira], SnapshotCarteira | None]:
+    """
+    Restaura o último snapshot. Devolve (pilha restante, snapshot aplicado)
+    ou (pilha, None) se não houver o que desfazer.
+    """
+    hist = list(historico or [])
+    if not hist:
+        return hist, None
+    prev = hist.pop()
+    substituir_posicoes(prev, db_path=db_path)
+    return hist, prev
 
 
 @dataclass(frozen=True)
@@ -324,6 +369,62 @@ def aplicar_venda(
     )
 
 
+def atualizar_proventos_carteira(
+    posicoes: list[Posicao] | list[PosicaoSalva],
+    *,
+    dy_padrao: float = 6.0,
+    db_path: Path | None = None,
+    atualizar_preco: bool = True,
+) -> list[str]:
+    """
+    Refetch proventos (e opcionalmente preço) de todos os tickers da carteira
+    e grava em ``acoes``. Retorna avisos por ticker.
+    """
+    avisos: list[str] = []
+    for p in posicoes:
+        t = p.ticker.strip().upper()
+        if not t:
+            continue
+        salva = obter_acao(t, db_path=db_path)
+        dy = float(salva.dy) if salva and salva.dy > 0 else dy_padrao
+        preco = float(salva.preco) if salva and salva.preco > 0 else 0.0
+        proventos = salva.proventos if salva else ""
+
+        if atualizar_preco:
+            try:
+                cot = fetch_preco(t)
+                if cot and cot.preco and cot.preco > 0:
+                    preco = float(cot.preco)
+            except Exception as exc:  # noqa: BLE001
+                avisos.append(f"{t}: preço ({exc})")
+
+        try:
+            got = fetch_proventos(t)
+            if got and got.texto:
+                proventos = got.texto
+                avisos.append(
+                    f"{t}: {got.quantidade} provento(s) via {got.fonte}"
+                )
+            else:
+                avisos.append(f"{t}: nenhum provento retornado")
+        except Exception as exc:  # noqa: BLE001
+            avisos.append(f"{t}: proventos ({exc})")
+
+        if preco <= 0:
+            preco = float(p.preco_medio) if p.preco_medio > 0 else 0.01
+        try:
+            salvar_acao(
+                ticker=t,
+                preco=preco,
+                dy=dy,
+                proventos=proventos,
+                db_path=db_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            avisos.append(f"{t}: falha ao salvar ({exc})")
+    return avisos
+
+
 def garantir_acoes_das_posicoes(
     posicoes: list[Posicao] | list[PosicaoSalva],
     *,
@@ -369,6 +470,13 @@ def garantir_acoes_das_posicoes(
         except Exception as exc:  # noqa: BLE001
             avisos.append(f"{t}: falha ao salvar em acoes ({exc})")
     return avisos
+
+
+def dy_estimado(provento_por_acao: float | None, preco: float | None) -> float | None:
+    """DY estimado = provento líquido/ação ÷ preço atual (fração, ex.: 0.08 = 8%)."""
+    if provento_por_acao is None or preco is None or preco <= 0:
+        return None
+    return float(provento_por_acao) / float(preco)
 
 
 @dataclass(frozen=True)

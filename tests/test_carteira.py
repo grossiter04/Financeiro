@@ -12,8 +12,10 @@ from calculadora.carteira import (
     Posicao,
     aplicar_compra,
     aplicar_venda,
+    atualizar_proventos_carteira,
     calendario_proventos_acao,
     calendario_proventos_carteira,
+    desfazer_carteira,
     enriquecer_posicoes,
     estimar_proventos_acao,
     estimar_proventos_carteira,
@@ -21,7 +23,10 @@ from calculadora.carteira import (
     garantir_acoes_das_posicoes,
     parse_csv_carteira,
     posicoes_de_editor,
+    dy_estimado,
     preco_medio_apos_compra,
+    push_undo_carteira,
+    snapshot_posicoes,
 )
 from calculadora.storage import (
     listar_posicoes,
@@ -106,6 +111,12 @@ def test_posicoes_de_editor():
     assert pos[0].preco_medio == pytest.approx(32.5)
 
 
+def test_dy_estimado():
+    assert dy_estimado(0.80, 10.0) == pytest.approx(0.08)
+    assert dy_estimado(None, 10.0) is None
+    assert dy_estimado(0.80, 0) is None
+
+
 def test_preco_medio_apos_compra():
     # 10 @ 10 + 10 @ 20 = 20 @ 15
     qtd, pm = preco_medio_apos_compra(10, 10.0, 10, 20.0)
@@ -164,6 +175,37 @@ def test_garantir_acoes_das_posicoes(monkeypatch, db: Path):
     # segunda vez não recria
     avisos2 = garantir_acoes_das_posicoes(pos, db_path=db)
     assert not any("cadastrado" in a for a in avisos2)
+
+
+def test_atualizar_proventos_carteira(monkeypatch, db: Path):
+    salvar_acao(
+        ticker="CMIG4",
+        preco=10.0,
+        dy=7.0,
+        proventos="Dividendo\t01/01/2024\t01/02/2024\t0,10",
+        db_path=db,
+    )
+
+    class Cot:
+        preco = 12.5
+
+    class Prov:
+        texto = "Dividendo\t15/03/2027\t20/03/2027\t0,55"
+        quantidade = 1
+        fonte = "teste"
+
+    monkeypatch.setattr("calculadora.carteira.fetch_preco", lambda t: Cot())
+    monkeypatch.setattr("calculadora.carteira.fetch_proventos", lambda t: Prov())
+
+    avisos = atualizar_proventos_carteira(
+        [Posicao("CMIG4", 29, 11.0)], db_path=db
+    )
+    assert any("CMIG4" in a and "provento" in a for a in avisos)
+    acao = obter_acao("CMIG4", db_path=db)
+    assert acao is not None
+    assert acao.dy == pytest.approx(7.0)
+    assert acao.preco == pytest.approx(12.5)
+    assert "15/03/2027" in acao.proventos
 
 
 _PROVENTOS_EST = """\
@@ -266,3 +308,26 @@ def test_calendario_carteira(db: Path):
     assert cart.por_acao[0].ticker == "CMIG4"
     meses = {m for m, _ in cart.por_mes}
     assert 3 in meses and 8 in meses
+
+
+def test_desfazer_carteira_restaura_pm(db: Path):
+    salvar_posicao(ticker="SANB4", quantidade=35, preco_medio=14.18, db_path=db)
+    hist = push_undo_carteira([], db_path=db)
+    # simula erro: PM virando total/errado
+    salvar_posicao(ticker="SANB4", quantidade=35, preco_medio=99.26, db_path=db)
+    assert listar_posicoes(db_path=db)[0].preco_medio == pytest.approx(99.26)
+
+    hist2, prev = desfazer_carteira(hist, db_path=db)
+    assert prev is not None
+    assert hist2 == []
+    pos = listar_posicoes(db_path=db)
+    assert len(pos) == 1
+    assert pos[0].ticker == "SANB4"
+    assert pos[0].preco_medio == pytest.approx(14.18)
+    assert pos[0].quantidade == pytest.approx(35)
+
+    # pilha vazia
+    hist3, prev3 = desfazer_carteira([], db_path=db)
+    assert prev3 is None
+    assert hist3 == []
+    assert snapshot_posicoes(db_path=db)[0][2] == pytest.approx(14.18)

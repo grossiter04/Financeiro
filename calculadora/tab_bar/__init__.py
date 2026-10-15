@@ -18,6 +18,7 @@ def browser_tabs(
     *,
     logos: list[str] | None = None,
     active: int = 0,
+    tema: str = "claro",
     key: str | None = None,
 ) -> dict[str, Any] | None:
     """
@@ -32,6 +33,7 @@ def browser_tabs(
         labels=labels,
         logos=logos_ok[:n],
         active=int(active),
+        tema=str(tema or "claro"),
         key=key,
         default=None,
     )

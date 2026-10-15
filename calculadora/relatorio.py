@@ -5,14 +5,10 @@ from __future__ import annotations
 import html
 import json
 import os
-import re
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-
-import httpx
 
 from calculadora.core import (
     BAZIN_DY,
@@ -37,21 +33,19 @@ from calculadora.noticias import (
 from calculadora.preco import fetch_historico
 from calculadora.proventos_fetch import fetch_proventos
 from calculadora.setores import agrupar_por_setor, normalizar_setor, rotulo_setor
+from calculadora.gemini_client import (
+    GEMINI_MODELOS_PADRAO,
+    chamar_gemini,
+    extrair_json,
+    gemini_modelos,
+)
 from calculadora.sinal import SinalOrientativo, calcular_sinal
 from calculadora.storage import listar_acoes, obter_acao
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-# Ordem: modelos estáveis primeiro; 2.5-flash como rede de segurança se a família 3.x estiver em 503
-GEMINI_MODELOS_PADRAO = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-    "gemini-2.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-]
 MAX_NOTICIAS_IA = 40  # menos notícias → JSON da IA mais estável
-_GEMINI_RETRIES_503 = 2
-_GEMINI_ESPERA_503_S = 4.0
+
+# Compat testes / imports antigos
+_extrair_json = extrair_json
 
 _POSITIVAS = [
     "alta", "sobe", "subiu", "dispara", "avanca", "lucro", "recorde", "supera",
@@ -246,6 +240,32 @@ def sentimento_de_diretas(
     return "neutro", False, ids
 
 
+def sentimento_rapido_ticker(
+    ticker: str,
+    noticias: list[Noticia],
+) -> tuple[str, bool]:
+    """
+    Sentimento por palavras-chave só com citação direta (para a Calculadora).
+
+    Devolve (sentimento, confiante). Sem IA.
+    """
+    t = (ticker or "").strip().upper()
+    if not t or not noticias:
+        return "neutro", False
+    an_not: dict[str, AnaliseNoticia] = {
+        n.id: AnaliseNoticia(
+            id=n.id,
+            impacto=_impacto_por_palavras(n),
+            relevancia=3 if n.acoes_diretas else 1,
+            acoes=list(n.acoes_diretas),
+        )
+        for n in noticias
+        if t in n.acoes_diretas
+    }
+    sentimento, confiante, _ = sentimento_de_diretas(t, noticias, an_not)
+    return sentimento, confiante
+
+
 def analise_por_regras(
     metricas: list[MetricaAcao], noticias: list[Noticia]
 ) -> tuple[dict[str, AnaliseNoticia], dict[str, AnaliseAcao], str]:
@@ -312,9 +332,8 @@ def analise_por_regras(
             expectativa=" ".join(partes),
             noticias=[n.id for n in ligadas],
             noticias_diretas=ids_diretas,
-            sinal=calcular_sinal(
-                pct_bazin=m.pct_bazin,
-                pct_graham=m.pct_graham,
+            sinal=_sinal_de_metrica(
+                m,
                 sentimento=sentimento,
                 usar_sentimento=confiante,
             ),
@@ -328,6 +347,32 @@ def analise_por_regras(
     return an_not, an_acoes, resumo
 
 
+def _sinal_de_metrica(
+    m: MetricaAcao | None,
+    *,
+    sentimento: str | None = None,
+    usar_sentimento: bool = False,
+) -> SinalOrientativo:
+    """Sinal via motor unificado, com proventos locais quando existirem."""
+    if m is None:
+        return calcular_sinal(
+            sentimento=sentimento,
+            usar_sentimento=usar_sentimento,
+        )
+    salva = obter_acao(m.ticker)
+    proventos = salva.proventos if salva else ""
+    return calcular_sinal(
+        pct_bazin=m.pct_bazin,
+        pct_graham=m.pct_graham,
+        sentimento=sentimento,
+        usar_sentimento=usar_sentimento,
+        ticker=m.ticker,
+        preco=float(m.preco or 0),
+        proventos=proventos or "",
+        setor=m.setor or "",
+    )
+
+
 def _anexar_sinais(
     metricas: list[MetricaAcao], an_acoes: dict[str, AnaliseAcao]
 ) -> None:
@@ -335,9 +380,8 @@ def _anexar_sinais(
     por_ticker = {m.ticker: m for m in metricas}
     for ticker, an in an_acoes.items():
         m = por_ticker.get(ticker)
-        an.sinal = calcular_sinal(
-            pct_bazin=m.pct_bazin if m else None,
-            pct_graham=m.pct_graham if m else None,
+        an.sinal = _sinal_de_metrica(
+            m,
             sentimento=an.sentimento,
             usar_sentimento=an.sentimento_confiante,
         )
@@ -394,97 +438,6 @@ Regras rígidas:
 
 Responda SOMENTE com JSON no formato:
 {{"resumo_mercado": "", "destaques": [""], "noticias": [{{"id": "", "impacto": "", "relevancia": 1, "acoes": [""], "explicacao": ""}}], "acoes": [{{"ticker": "", "tendencia": "", "sentimento": "", "expectativa": "", "riscos": "", "noticias": [""]}}]}}"""
-
-
-def _reparar_json_texto(texto: str) -> str:
-    """Corrige falhas comuns da IA (vírgula sobrando, cercas, comentários)."""
-    texto = texto.strip()
-    texto = re.sub(r"^```(?:json)?\s*", "", texto)
-    texto = re.sub(r"\s*```$", "", texto)
-    # Remove vírgulas finais antes de } ou ]
-    texto = re.sub(r",(\s*[}\]])", r"\1", texto)
-    # Remove comentários de linha estilo //
-    texto = re.sub(r"(?m)^\s*//.*?$", "", texto)
-    return texto.strip()
-
-
-def _extrair_json(texto: str) -> dict:
-    bruto = _reparar_json_texto(texto)
-    inicio, fim = bruto.find("{"), bruto.rfind("}")
-    if inicio < 0 or fim < 0 or fim <= inicio:
-        raise ValueError("resposta da IA sem JSON")
-    pedaco = bruto[inicio : fim + 1]
-    try:
-        return json.loads(pedaco)
-    except json.JSONDecodeError:
-        # Segunda passagem: às vezes sobra vírgula após reparo parcial
-        pedaco2 = re.sub(r",(\s*[}\]])", r"\1", pedaco)
-        return json.loads(pedaco2)
-
-
-def chamar_gemini(prompt: str, *, api_key: str, modelos: list[str], timeout: float = 240.0) -> tuple[dict, str]:
-    erros: list[str] = []
-    with httpx.Client(timeout=timeout) as client:
-        for modelo in modelos:
-            # Modelos 2.x às vezes rejeitam thinkingConfig; tenta com e sem
-            variantes = [True, False] if "gemini-3" in modelo else [False, True]
-            ok_http = False
-            for com_thinking in variantes:
-                corpo = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "maxOutputTokens": 8192,
-                        **(
-                            {"thinkingConfig": {"thinkingLevel": "low"}}
-                            if com_thinking
-                            else {}
-                        ),
-                    },
-                }
-                resp = None
-                for tentativa in range(_GEMINI_RETRIES_503 + 1):
-                    try:
-                        resp = client.post(
-                            GEMINI_URL.format(model=modelo),
-                            headers={
-                                "x-goog-api-key": api_key,
-                                "Content-Type": "application/json",
-                            },
-                            json=corpo,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        erros.append(f"{modelo}: {exc}")
-                        resp = None
-                        break
-                    if resp.status_code == 503 and tentativa < _GEMINI_RETRIES_503:
-                        time.sleep(_GEMINI_ESPERA_503_S * (tentativa + 1))
-                        continue
-                    break
-                if resp is None:
-                    break
-                if resp.status_code == 400 and com_thinking:
-                    # thinkingConfig rejeitado → tenta sem
-                    continue
-                if resp.status_code != 200:
-                    erros.append(
-                        f"{modelo}: HTTP {resp.status_code} {resp.text[:220]}"
-                    )
-                    break
-                ok_http = True
-                try:
-                    payload = resp.json()
-                    partes = payload["candidates"][0]["content"]["parts"]
-                    texto = "".join(p.get("text", "") for p in partes if "text" in p)
-                    if not texto.strip():
-                        raise ValueError("resposta vazia (só thinking?)")
-                    return _extrair_json(texto), modelo
-                except Exception as exc:  # noqa: BLE001
-                    erros.append(f"{modelo}: {exc}")
-                    break
-            if not ok_http:
-                continue
-    raise RuntimeError("; ".join(erros) or "nenhum modelo disponível")
 
 
 _IMPACTOS_OK = frozenset({"positivo", "negativo", "neutro", "misto"})
@@ -631,10 +584,13 @@ def gerar_relatorio(
 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if usar_ia and api_key:
-        env_modelo = os.environ.get("GEMINI_MODEL", "").strip()
-        modelos = [env_modelo] + [m for m in GEMINI_MODELOS_PADRAO if m != env_modelo] if env_modelo else GEMINI_MODELOS_PADRAO
+        modelos = gemini_modelos()
         try:
-            dados, modelo = chamar_gemini(_prompt(metricas, relevantes, agora.strftime("%d/%m/%Y")), api_key=api_key, modelos=modelos)
+            dados, modelo = chamar_gemini(
+                _prompt(metricas, relevantes, agora.strftime("%d/%m/%Y")),
+                api_key=api_key,
+                modelos=modelos,
+            )
             resumo_ia, destaques = _aplicar_ia(dados, metricas, relevantes, an_not, an_acoes)
             resumo = resumo_ia or resumo
             motor = modelo
@@ -745,9 +701,8 @@ def _linha_tabela_acao(rel: Relatorio, m: MetricaAcao) -> str:
     an = rel.analise_acoes.get(m.ticker) or AnaliseAcao(m.ticker)
     preco = "—" if m.preco is None else f"R$ {m.preco:.2f}"
     tend = an.tendencia
-    sinal = an.sinal or calcular_sinal(
-        pct_bazin=m.pct_bazin,
-        pct_graham=m.pct_graham,
+    sinal = an.sinal or _sinal_de_metrica(
+        m,
         sentimento=an.sentimento,
         usar_sentimento=an.sentimento_confiante,
     )
@@ -819,9 +774,8 @@ def renderizar_html(rel: Relatorio) -> str:
             an = rel.analise_acoes.get(m.ticker)
             if an is None:
                 continue
-            sinal = an.sinal or calcular_sinal(
-                pct_bazin=m.pct_bazin,
-                pct_graham=m.pct_graham,
+            sinal = an.sinal or _sinal_de_metrica(
+                m,
                 sentimento=an.sentimento,
                 usar_sentimento=an.sentimento_confiante,
             )
@@ -902,9 +856,8 @@ def renderizar_texto(rel: Relatorio) -> str:
         for m in grupo:
             an = rel.analise_acoes.get(m.ticker) or AnaliseAcao(m.ticker)
             preco = "—" if m.preco is None else f"R$ {m.preco:.2f}"
-            sinal = an.sinal or calcular_sinal(
-                pct_bazin=m.pct_bazin,
-                pct_graham=m.pct_graham,
+            sinal = an.sinal or _sinal_de_metrica(
+                m,
                 sentimento=an.sentimento,
                 usar_sentimento=an.sentimento_confiante,
             )

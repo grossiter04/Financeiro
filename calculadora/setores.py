@@ -49,8 +49,13 @@ ROTULOS_SETOR: dict[str, str] = {
 
 
 def normalizar_setor(setor: str | None) -> str:
-    s = (setor or "outros").strip().lower()
-    return s or "outros"
+    s = (setor or "").strip().lower()
+    if not s:
+        return "outros"
+    if s in ROTULOS_SETOR:
+        return s
+    # Yahoo/brapi em inglês (ex.: Industrials) → chave local
+    return setor_de_perfil(s)
 
 
 def rotulo_setor(setor: str | None) -> str:
@@ -65,6 +70,98 @@ def ordem_setor(setor: str | None) -> tuple[int, str]:
     except ValueError:
         idx = len(ORDEM_SETORES)
     return (idx, chave)
+
+
+# Yahoo / brapi (EN e PT) → chave interna
+_SETOR_EXTERNO: dict[str, str] = {
+    "industrials": "industria",
+    "industrial": "industria",
+    "indústria": "industria",
+    "industria": "industria",
+    "financial services": "bancos",
+    "financials": "bancos",
+    "banks": "bancos",
+    "bancos": "bancos",
+    "utilities": "energia",
+    "utility": "energia",
+    "energia": "energia",
+    "energy": "petroleo",
+    "oil & gas": "petroleo",
+    "petroleo": "petroleo",
+    "petróleo": "petroleo",
+    "basic materials": "mineracao",
+    "basicmaterials": "mineracao",
+    "mineracao": "mineracao",
+    "mineração": "mineracao",
+    "communication services": "telecom",
+    "communications": "telecom",
+    "telecom": "telecom",
+    "telecommunications": "telecom",
+    "healthcare": "saude",
+    "health care": "saude",
+    "saude": "saude",
+    "saúde": "saude",
+    "consumer cyclical": "varejo",
+    "consumer defensive": "varejo",
+    "consumer staples": "varejo",
+    "consumer discretionary": "varejo",
+    "varejo": "varejo",
+    "real estate": "construcao",
+    "construcao": "construcao",
+    "construção": "construcao",
+    "technology": "industria",
+    "agriculture": "agro",
+    "agro": "agro",
+}
+
+
+def setor_de_perfil(setor: str | None = None, industria: str | None = None) -> str:
+    """
+    Converte setor/indústria externos (Yahoo, brapi) para a chave local.
+
+    Indústria tem prioridade quando é mais específica (ex.: Insurance → seguros).
+    """
+    ind = (industria or "").strip().lower()
+    sec = (setor or "").strip().lower()
+    blob = f"{sec} {ind}"
+
+    if any(k in blob for k in ("insurance", "seguro", "seguridade")):
+        return "seguros"
+    if any(k in blob for k in ("bank", "banco", "financial services")):
+        return "bancos"
+    if "exchange" in blob or "bolsa" in blob:
+        return "bolsa"
+    if any(k in blob for k in ("oil", "gas", "petróleo", "petroleo", "refin")):
+        return "petroleo"
+    if any(k in blob for k in ("mining", "miner", "steel", "siderurg")):
+        return "mineracao"
+    if any(k in blob for k in ("paper", "pulp", "celulose", "papel")):
+        return "papel"
+    if any(k in blob for k in ("telecom", "wireless", "comunicação", "comunicacao")):
+        return "telecom"
+    if any(k in blob for k in ("water", "saneamento", "utilities-regulated water")):
+        return "saneamento"
+    if any(k in blob for k in ("electric", "utilities", "energia", "transmission")):
+        return "energia"
+    if any(k in blob for k in ("health", "pharma", "hospital", "saúde", "saude")):
+        return "saude"
+    if any(k in blob for k in ("retail", "store", "varejo", "e-commerce")):
+        return "varejo"
+    if any(k in blob for k in ("real estate", "reit", "construção", "construcao", "builder")):
+        return "construcao"
+    if any(k in blob for k in ("farm", "agro", "agriculture", "fertiliz")):
+        # Marcopolo = Farm & Heavy Construction Machinery → indústria, não agro
+        if "machinery" in blob or "construction" in blob or "bus" in blob:
+            return "industria"
+        return "agro"
+    if any(k in blob for k in ("industrial", "indústria", "industria", "machinery", "aerospace")):
+        return "industria"
+
+    if sec in _SETOR_EXTERNO:
+        return _SETOR_EXTERNO[sec]
+    if sec in ROTULOS_SETOR:
+        return sec
+    return "outros"
 
 
 def setor_do_ticker(

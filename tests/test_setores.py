@@ -2,6 +2,7 @@ from calculadora.setores import (
     agrupar_por_setor,
     normalizar_setor,
     rotulo_setor,
+    setor_de_perfil,
 )
 
 
@@ -10,6 +11,35 @@ def test_rotulos_e_normalizacao():
     assert rotulo_setor("energia") == "Energia"
     assert rotulo_setor("petroleo") == "Petróleo"
     assert rotulo_setor(None) == "Outros"
+    assert normalizar_setor("Industrials") == "industria"
+
+
+def test_setor_de_perfil_yahoo():
+    assert setor_de_perfil("Industrials", "Farm & Heavy Construction Machinery") == "industria"
+    assert setor_de_perfil("Financial Services", "Banks — Regional") == "bancos"
+    assert setor_de_perfil("Utilities", "Utilities — Regulated Electric") == "energia"
+    assert setor_de_perfil("Energy", "Oil & Gas Integrated") == "petroleo"
+    assert setor_de_perfil("", "") == "outros"
+
+
+def test_garantir_empresa_toml(tmp_path):
+    from pathlib import Path
+
+    from calculadora.noticias import garantir_empresa_toml, load_empresas
+
+    path = tmp_path / "empresas.toml"
+    path.write_text("# teste\n", encoding="utf-8")
+    assert garantir_empresa_toml(
+        "POMO4", nome="Marcopolo S.A.", setor="industria", path=path
+    )
+    mapa = load_empresas(path)
+    assert "POMO" in mapa
+    assert mapa["POMO"].setor == "industria"
+    assert "Marcopolo" in mapa["POMO"].nomes
+    # não duplica
+    assert not garantir_empresa_toml(
+        "POMO3", nome="Marcopolo", setor="industria", path=path
+    )
 
 
 def test_agrupar_por_setor_ordem_perene():
@@ -67,4 +97,4 @@ def test_relatorio_html_agrupa_por_setor():
     texto = renderizar_texto(rel)
     assert "SUAS AÇÕES POR SETOR" in texto
     assert "## Bancos" in texto
-    assert "Atrativa" in html
+    assert "Comprar" in html

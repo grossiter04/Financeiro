@@ -15,15 +15,16 @@ from calculadora.relatorio import (
 
 
 def _dados():
+    # FAKE4: ticker que não deve existir no banco local (evita DY “fantasma” no sinal)
     metricas = [
         MetricaAcao("PETR4", "Petrobras", "petroleo", preco=30.0, var_dia=0.03, var_mes=0.08, pct_bazin=-0.1),
-        MetricaAcao("ITUB4", "Itaú", "bancos", preco=40.0, var_dia=-0.01, var_mes=-0.05),
+        MetricaAcao("FAKE4", "Fake Bank", "bancos", preco=40.0, var_dia=-0.01, var_mes=-0.05),
     ]
     noticias = [
         Noticia("n1", "Petrobras dispara com lucro recorde", "", "https://ex.com/1", "InfoMoney", None,
                 acoes_diretas=["PETR4"]),
         Noticia("n2", "Copom mantém Selic", "", "https://ex.com/2", "Suno", None,
-                temas=["juros e inflação"], acoes_tema=["ITUB4"]),
+                temas=["juros e inflação"], acoes_tema=["FAKE4"]),
     ]
     return metricas, noticias
 
@@ -38,18 +39,18 @@ def test_regras_classifica_impacto_e_tendencia():
     assert an_acoes["PETR4"].sentimento == "positivo"
     assert an_acoes["PETR4"].sentimento_confiante is True
     assert an_acoes["PETR4"].noticias_diretas == ["n1"]
-    assert an_acoes["ITUB4"].tendencia == "queda"
-    assert an_acoes["ITUB4"].sentimento == "neutro"
-    assert an_acoes["ITUB4"].sentimento_confiante is False
-    assert an_acoes["ITUB4"].noticias == ["n2"]  # contexto de setor
-    assert an_acoes["ITUB4"].noticias_diretas == []
+    assert an_acoes["FAKE4"].tendencia == "queda"
+    assert an_acoes["FAKE4"].sentimento == "neutro"
+    assert an_acoes["FAKE4"].sentimento_confiante is False
+    assert an_acoes["FAKE4"].noticias == ["n2"]  # contexto de setor
+    assert an_acoes["FAKE4"].noticias_diretas == []
     assert "rígida" in resumo or "rigida" in resumo.lower() or "citam" in resumo
     assert an_acoes["PETR4"].sinal is not None
     assert an_acoes["PETR4"].sinal.codigo == "compra"
-    # ITUB4 sem valuation + sem notícia direta → sem_dados
-    assert an_acoes["ITUB4"].sinal is not None
-    assert an_acoes["ITUB4"].sinal.codigo == "sem_dados"
-    assert an_acoes["ITUB4"].sentimento_confiante is False
+    # FAKE4 sem valuation + sem notícia direta → sem_dados
+    assert an_acoes["FAKE4"].sinal is not None
+    assert an_acoes["FAKE4"].sinal.codigo == "sem_dados"
+    assert an_acoes["FAKE4"].sentimento_confiante is False
 
 
 def test_sentimento_de_diretas_exige_citacao():
@@ -62,7 +63,7 @@ def test_sentimento_de_diretas_exige_citacao():
     }
     sent, conf, ids = sentimento_de_diretas("PETR4", noticias, an_not)
     assert sent == "positivo" and conf and ids == ["n1"]
-    sent2, conf2, ids2 = sentimento_de_diretas("ITUB4", noticias, an_not)
+    sent2, conf2, ids2 = sentimento_de_diretas("FAKE4", noticias, an_not)
     assert sent2 == "neutro" and not conf2 and ids2 == []
 
 
@@ -73,8 +74,8 @@ def test_aplicar_ia_filtra_setor_e_recalcula_sentimento():
         "resumo_mercado": "Mercado otimista.",
         "destaques": ["Selic estável"],
         "noticias": [
-            # IA tenta ligar Selic a ITUB4 — acoes ficam [] (setor), mas a notícia permanece
-            {"id": "n2", "impacto": "negativo", "relevancia": 5, "acoes": ["ITUB4"], "explicacao": "Juros."},
+            # IA tenta ligar Selic a FAKE4 — acoes ficam [] (setor), mas a notícia permanece
+            {"id": "n2", "impacto": "negativo", "relevancia": 5, "acoes": ["FAKE4"], "explicacao": "Juros."},
             {"id": "n1", "impacto": "positivo", "relevancia": 9, "acoes": ["PETR4", "XXXX3"], "explicacao": "Lucro."},
             {"id": "inventada", "impacto": "negativo"},
         ],
@@ -87,7 +88,7 @@ def test_aplicar_ia_filtra_setor_e_recalcula_sentimento():
                 "noticias": ["n1", "zz"],
             },
             {
-                "ticker": "ITUB4",
+                "ticker": "FAKE4",
                 "tendencia": "queda",
                 "sentimento": "negativo",  # sem citação direta — neutro
                 "expectativa": "Pressão de juros.",
@@ -104,13 +105,13 @@ def test_aplicar_ia_filtra_setor_e_recalcula_sentimento():
     assert an_not["n2"].explicacao == "Juros."
     # Notícias das regras não sumiram só porque a IA omitiu alguma
     assert set(an_not) >= {"n1", "n2"}
-    # Sentimento recalculado: PETR4 positivo; ITUB4 neutro sem confiança
+    # Sentimento recalculado: PETR4 positivo; FAKE4 neutro sem confiança
     assert an_acoes["PETR4"].sentimento == "positivo"
     assert an_acoes["PETR4"].sentimento_confiante is True
     assert an_acoes["PETR4"].noticias_diretas == ["n1"]
-    assert an_acoes["ITUB4"].sentimento == "neutro"
-    assert an_acoes["ITUB4"].sentimento_confiante is False
-    assert an_acoes["ITUB4"].expectativa == "Pressão de juros."
+    assert an_acoes["FAKE4"].sentimento == "neutro"
+    assert an_acoes["FAKE4"].sentimento_confiante is False
+    assert an_acoes["FAKE4"].expectativa == "Pressão de juros."
 
 
 def test_aplicar_ia_nao_apaga_noticias_omitidas_pela_ia():
@@ -153,10 +154,10 @@ def test_renderiza_html_e_texto():
     html = renderizar_html(rel)
     assert "PETR4" in html and "https://ex.com/1" in html and "<table" in html
     assert "Próx. com" in html and "Últ. com" in html
-    assert "Atrativa" in html
+    assert "Comprar" in html
     assert "citação direta" in html or "citações diretas" in html
     texto = renderizar_texto(rel)
     assert "PETR4" in texto and "Copom mantém Selic" in texto
     assert "próx. com" in texto and "últ. com" in texto
-    assert "Atrativa" in texto
-    assert "neutro*" in texto  # ITUB4 sem evidência direta
+    assert "Comprar" in texto
+    assert "neutro*" in texto  # FAKE4 sem evidência direta

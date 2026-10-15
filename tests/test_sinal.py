@@ -4,21 +4,21 @@ from calculadora.sinal import calcular_sinal, formatar_margem_pct, item_fila_de_
 def test_sinal_barata_atrativa():
     s = calcular_sinal(pct_bazin=-0.20, pct_graham=-0.18)
     assert s.codigo == "compra"
-    assert s.rotulo == "Atrativa"
+    assert s.rotulo == "Comprar"
     assert "Bazin" in s.resumo
 
 
 def test_sinal_muito_cara_esticada():
     s = calcular_sinal(pct_bazin=0.25, pct_graham=0.30)
     assert s.codigo == "cautela"
-    assert s.rotulo == "Esticada"
+    assert s.rotulo == "Evitar"
 
 
 def test_sinal_levemente_cara_fica_neutra():
     # Antes virava cautela fácil; agora margem moderada fica neutra
     s = calcular_sinal(pct_bazin=0.08, pct_graham=0.06)
     assert s.codigo == "aguardar"
-    assert s.rotulo == "Neutra"
+    assert s.rotulo == "Esperar"
 
 
 def test_sinal_ignora_sentimento_sem_flag():
