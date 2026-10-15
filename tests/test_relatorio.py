@@ -3,15 +3,21 @@ from datetime import datetime
 from calculadora.mail import BRT
 from calculadora.noticias import Noticia
 from calculadora.relatorio import (
+    CarteiraRelatorio,
+    ItemAcaoCarteira,
+    LinhaCarteiraRelatorio,
     MetricaAcao,
     Relatorio,
     _aplicar_ia,
     _extrair_json,
     analise_por_regras,
+    montar_carteira_relatorio,
     renderizar_html,
     renderizar_texto,
     sentimento_de_diretas,
 )
+from calculadora.sinal import SinalOrientativo
+from calculadora.storage import PosicaoSalva
 
 
 def _dados():
@@ -156,8 +162,111 @@ def test_renderiza_html_e_texto():
     assert "Próx. com" in html and "Últ. com" in html
     assert "Comprar" in html
     assert "citação direta" in html or "citações diretas" in html
+    assert "Minha carteira" in html
+    assert "Cadastre posições" in html
     texto = renderizar_texto(rel)
     assert "PETR4" in texto and "Copom mantém Selic" in texto
     assert "próx. com" in texto and "últ. com" in texto
     assert "Comprar" in texto
     assert "neutro*" in texto  # FAKE4 sem evidência direta
+    assert "MINHA CARTEIRA" in texto
+
+
+def test_montar_carteira_relatorio_com_posicoes():
+    metricas, noticias = _dados()
+    an_not, an_acoes, _ = analise_por_regras(metricas, noticias)
+    posicoes = [
+        PosicaoSalva(
+            ticker="PETR4", quantidade=100, preco_medio=28.0, updated_at="2026-10-06"
+        ),
+        PosicaoSalva(
+            ticker="FAKE4", quantidade=50, preco_medio=45.0, updated_at="2026-10-06"
+        ),
+    ]
+    cart = montar_carteira_relatorio(
+        posicoes,
+        metricas,
+        an_acoes,
+        noticias,
+        an_not=an_not,
+        usar_tese=False,
+    )
+    assert len(cart.linhas) == 2
+    assert cart.patrimonio > 0
+    assert cart.custo_total > 0
+    petr = next(L for L in cart.linhas if L.ticker == "PETR4")
+    assert petr.resultado_pct is not None and petr.resultado_pct > 0
+    assert petr.sinal is not None
+    assert "n1" in cart.noticia_ids
+    assert any(x.ticker == "PETR4" for x in cart.reforcar)
+
+
+def test_montar_carteira_vazia():
+    cart = montar_carteira_relatorio([], [], {}, [], usar_tese=False)
+    assert cart.linhas == []
+    assert cart.reforcar == []
+    assert cart.patrimonio == 0
+
+
+def test_render_html_com_carteira_preenchida():
+    metricas, noticias = _dados()
+    an_not, an_acoes, resumo = analise_por_regras(metricas, noticias)
+    sinal = SinalOrientativo(
+        codigo="compra",
+        rotulo="Comprar",
+        score=2.0,
+        resumo="Barata no Bazin.",
+    )
+    cart = CarteiraRelatorio(
+        patrimonio=3000.0,
+        custo_total=2800.0,
+        resultado_pct=3000 / 2800 - 1,
+        linhas=[
+            LinhaCarteiraRelatorio(
+                ticker="PETR4",
+                quantidade=100,
+                preco_medio=28.0,
+                preco_atual=30.0,
+                custo=2800.0,
+                valor_mercado=3000.0,
+                resultado_pct=30 / 28 - 1,
+                peso_pct=1.0,
+                setor="petroleo",
+                var_dia=0.03,
+                var_mes=0.08,
+                sinal=sinal,
+                resumo=sinal.resumo,
+            )
+        ],
+        reforcar=[
+            ItemAcaoCarteira(
+                ticker="PETR4",
+                rotulo="Comprar",
+                resumo="Barata no Bazin.",
+                score=2.0,
+                peso_pct=1.0,
+                resultado_pct=30 / 28 - 1,
+            )
+        ],
+        noticia_ids=["n1"],
+    )
+    rel = Relatorio(
+        datetime(2026, 10, 6, 9, 37, tzinfo=BRT),
+        metricas,
+        noticias,
+        an_not,
+        an_acoes,
+        resumo,
+        carteira=cart,
+    )
+    html = renderizar_html(rel)
+    assert "Minha carteira" in html
+    assert "O que fazer hoje" in html
+    assert "Notícias da carteira" in html
+    assert "Reforçar" in html
+    assert "PETR4" in html
+    assert "Petrobras dispara" in html
+    texto = renderizar_texto(rel)
+    assert "MINHA CARTEIRA" in texto
+    assert "O QUE FAZER HOJE" in texto
+    assert "Reforçar:" in texto

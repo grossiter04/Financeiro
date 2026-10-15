@@ -19,6 +19,11 @@ from calculadora.core import (
     conta_graham,
     resumo_datas_com,
 )
+from calculadora.carteira import (
+    PosicaoEnriquecida,
+    enriquecer_posicoes,
+    garantir_acoes_das_posicoes,
+)
 from calculadora.fundamentos import fetch_fundamentos
 from calculadora.mail import BRT, agora_brt, enviar_email, smtp_config_from_env
 from calculadora.noticias import (
@@ -40,7 +45,8 @@ from calculadora.gemini_client import (
     gemini_modelos,
 )
 from calculadora.sinal import SinalOrientativo, calcular_sinal
-from calculadora.storage import listar_acoes, obter_acao
+from calculadora.storage import PosicaoSalva, listar_acoes, listar_posicoes, obter_acao
+from calculadora.tese import montar_tese_dividendo
 
 MAX_NOTICIAS_IA = 40  # menos notícias → JSON da IA mais estável
 
@@ -116,6 +122,46 @@ class AnaliseAcao:
 
 
 @dataclass
+class ItemAcaoCarteira:
+    """Candidato a reforçar ou a revisar na carteira real."""
+
+    ticker: str
+    rotulo: str
+    resumo: str
+    score: float = 0.0
+    peso_pct: float | None = None
+    resultado_pct: float | None = None
+
+
+@dataclass
+class LinhaCarteiraRelatorio:
+    ticker: str
+    quantidade: float
+    preco_medio: float
+    preco_atual: float | None
+    custo: float
+    valor_mercado: float | None
+    resultado_pct: float | None
+    peso_pct: float | None
+    setor: str
+    var_dia: float | None = None
+    var_mes: float | None = None
+    sinal: SinalOrientativo | None = None
+    resumo: str = ""
+
+
+@dataclass
+class CarteiraRelatorio:
+    patrimonio: float = 0.0
+    custo_total: float = 0.0
+    resultado_pct: float | None = None
+    linhas: list[LinhaCarteiraRelatorio] = field(default_factory=list)
+    reforcar: list[ItemAcaoCarteira] = field(default_factory=list)
+    revisar: list[ItemAcaoCarteira] = field(default_factory=list)
+    noticia_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Relatorio:
     gerado_em: datetime
     metricas: list[MetricaAcao]
@@ -126,6 +172,7 @@ class Relatorio:
     destaques: list[str] = field(default_factory=list)
     motor: str = "regras"
     avisos: list[str] = field(default_factory=list)
+    carteira: CarteiraRelatorio | None = None
 
 
 def calcular_metricas(item: ItemCarteira, empresa: Empresa | None) -> MetricaAcao:
@@ -390,7 +437,13 @@ def _anexar_sinais(
 # ---------- análise com Gemini ----------
 
 
-def _prompt(metricas: list[MetricaAcao], noticias: list[Noticia], data_txt: str) -> str:
+def _prompt(
+    metricas: list[MetricaAcao],
+    noticias: list[Noticia],
+    data_txt: str,
+    *,
+    carteira: CarteiraRelatorio | None = None,
+) -> str:
     acoes = [
         {
             "ticker": m.ticker,
@@ -415,12 +468,40 @@ def _prompt(metricas: list[MetricaAcao], noticias: list[Noticia], data_txt: str)
         }
         for n in noticias
     ]
+    bloco_carteira = ""
+    if carteira is not None and carteira.linhas:
+        pos_json = [
+            {
+                "ticker": L.ticker,
+                "peso_pct": None if L.peso_pct is None else round(L.peso_pct * 100, 1),
+                "resultado_vs_pm_pct": (
+                    None if L.resultado_pct is None else round(L.resultado_pct * 100, 1)
+                ),
+                "sinal": L.sinal.rotulo if L.sinal else None,
+            }
+            for L in carteira.linhas
+        ]
+        bloco_carteira = f"""
+CARTEIRA REAL DO INVESTIDOR (posições com peso e resultado vs preço médio):
+{json.dumps({
+    "patrimonio_aprox": round(carteira.patrimonio, 2),
+    "resultado_total_vs_custo_pct": (
+        None if carteira.resultado_pct is None
+        else round(carteira.resultado_pct * 100, 1)
+    ),
+    "posicoes": pos_json,
+    "reforcar": [x.ticker for x in carteira.reforcar],
+    "revisar": [x.ticker for x in carteira.revisar],
+}, ensure_ascii=False)}
+No "resumo_mercado", inclua 2 a 4 frases sobre ESSA carteira (pesos, sinais,
+notícias das posições). Use só tickers listados em posicoes — não invente papéis.
+"""
     return f"""Você é um analista de ações brasileiras. Hoje é {data_txt}.
 O investidor acompanha as ações abaixo (foco em dividendos; margem negativa = preço abaixo do teto, ou seja, barata).
 
 AÇÕES:
 {json.dumps(acoes, ensure_ascii=False)}
-
+{bloco_carteira}
 NOTÍCIAS DAS ÚLTIMAS HORAS (sites brasileiros de investimento):
 {json.dumps(lista_noticias, ensure_ascii=False)}
 
@@ -434,7 +515,7 @@ Regras rígidas:
 - Use apenas as notícias fornecidas; não invente fatos, números nem ligações empresa↔manchete.
 - Notícia de Selic/setor NÃO conta como sentimento da ação, a menos que "citadas" inclua o ticker.
 - Se não houver notícia direta sobre uma ação, diga isso e baseie-se no preço/valuation.
-- Não dê ordem de compra ou venda; descreva o cenário.
+- Não dê ordem de compra ou venda; descreva o cenário (Comprar/Esperar/Evitar são só leitura indicativa já calculada).
 
 Responda SOMENTE com JSON no formato:
 {{"resumo_mercado": "", "destaques": [""], "noticias": [{{"id": "", "impacto": "", "relevancia": 1, "acoes": [""], "explicacao": ""}}], "acoes": [{{"ticker": "", "tendencia": "", "sentimento": "", "expectativa": "", "riscos": "", "noticias": [""]}}]}}"""
@@ -546,6 +627,191 @@ def _itens_carteira() -> list[ItemCarteira]:
     ]
 
 
+def _sinal_para_posicao(
+    m: MetricaAcao | None,
+    an: AnaliseAcao | None,
+    *,
+    peso_setor: float | None,
+    usar_tese: bool = True,
+) -> SinalOrientativo:
+    """Sinal da posição: tese completa quando possível; senão o sinal já anexado."""
+    if (
+        usar_tese
+        and m is not None
+        and m.preco is not None
+        and float(m.preco) > 0
+    ):
+        salva = obter_acao(m.ticker)
+        proventos = salva.proventos if salva else ""
+        try:
+            fund = fetch_fundamentos(m.ticker)
+            tese = montar_tese_dividendo(
+                ticker=m.ticker,
+                preco=float(m.preco),
+                proventos=proventos or "",
+                pct_bazin=m.pct_bazin,
+                pct_graham=m.pct_graham,
+                fund=fund,
+                setor=m.setor or "",
+                peso_setor_carteira=peso_setor,
+                sentimento=an.sentimento if an else None,
+                usar_sentimento=bool(an and an.sentimento_confiante),
+            )
+            return SinalOrientativo(
+                codigo=tese.decisao,
+                rotulo=tese.rotulo,
+                score=float(tese.score),
+                resumo=tese.resumo,
+                detalhe=tese.detalhe,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    if an is not None and an.sinal is not None:
+        return an.sinal
+    return _sinal_de_metrica(
+        m,
+        sentimento=an.sentimento if an else None,
+        usar_sentimento=bool(an and an.sentimento_confiante),
+    )
+
+
+def _listas_reforcar_revisar(
+    linhas: list[LinhaCarteiraRelatorio],
+    *,
+    limite: int = 5,
+) -> tuple[list[ItemAcaoCarteira], list[ItemAcaoCarteira]]:
+    reforcar: list[ItemAcaoCarteira] = []
+    revisar: list[ItemAcaoCarteira] = []
+    for L in linhas:
+        if L.sinal is None:
+            continue
+        item = ItemAcaoCarteira(
+            ticker=L.ticker,
+            rotulo=L.sinal.rotulo,
+            resumo=L.resumo or L.sinal.resumo,
+            score=float(L.sinal.score),
+            peso_pct=L.peso_pct,
+            resultado_pct=L.resultado_pct,
+        )
+        if L.sinal.codigo == "compra":
+            reforcar.append(item)
+        elif L.sinal.codigo == "cautela":
+            revisar.append(item)
+        elif (
+            L.sinal.codigo == "aguardar"
+            and L.resultado_pct is not None
+            and L.resultado_pct <= -0.15
+        ):
+            revisar.append(item)
+    reforcar.sort(key=lambda x: -x.score)
+    revisar.sort(key=lambda x: (0 if x.rotulo == "Evitar" else 1, x.score))
+    return reforcar[:limite], revisar[:limite]
+
+
+def _noticia_ids_da_carteira(
+    tickers: set[str],
+    noticias: list[Noticia],
+    an_not: dict[str, AnaliseNoticia] | None = None,
+) -> list[str]:
+    ids: list[str] = []
+    vistos: set[str] = set()
+    for n in noticias:
+        liga = set(n.acoes_diretas or []) | set(n.acoes or [])
+        if an_not and n.id in an_not:
+            liga |= set(an_not[n.id].acoes or [])
+        if liga & tickers and n.id not in vistos:
+            vistos.add(n.id)
+            ids.append(n.id)
+    return ids
+
+
+def montar_carteira_relatorio(
+    posicoes: list[PosicaoSalva],
+    metricas: list[MetricaAcao],
+    an_acoes: dict[str, AnaliseAcao],
+    noticias: list[Noticia],
+    *,
+    an_not: dict[str, AnaliseNoticia] | None = None,
+    empresas: dict[str, Empresa] | None = None,
+    usar_tese: bool = True,
+) -> CarteiraRelatorio:
+    """Monta o bloco Minha carteira a partir das posições reais."""
+    if not posicoes:
+        return CarteiraRelatorio()
+
+    por_m = {m.ticker.upper(): m for m in metricas}
+    setores: dict[str, str] = {}
+    precos: dict[str, float | None] = {}
+    for p in posicoes:
+        t = p.ticker.strip().upper()
+        m = por_m.get(t)
+        if m is not None:
+            precos[t] = m.preco
+            setores[t] = normalizar_setor(m.setor)
+        elif empresas:
+            emp = empresas.get(raiz_ticker(t))
+            setores[t] = normalizar_setor(emp.setor if emp else "outros")
+        else:
+            setores[t] = "outros"
+            precos.setdefault(t, None)
+
+    enriquecidas: list[PosicaoEnriquecida] = enriquecer_posicoes(
+        posicoes, precos, setores=setores
+    )
+    patrimonio = sum(e.valor_mercado or 0.0 for e in enriquecidas)
+    custo_total = sum(e.custo for e in enriquecidas)
+    resultado_total: float | None = None
+    if custo_total > 0 and patrimonio > 0:
+        resultado_total = patrimonio / custo_total - 1.0
+
+    peso_por_setor: dict[str, float] = {}
+    for e in enriquecidas:
+        if e.peso_pct:
+            peso_por_setor[e.setor] = peso_por_setor.get(e.setor, 0.0) + float(e.peso_pct)
+
+    linhas: list[LinhaCarteiraRelatorio] = []
+    for e in enriquecidas:
+        t = e.ticker.upper()
+        m = por_m.get(t)
+        an = an_acoes.get(t) or an_acoes.get(e.ticker)
+        sinal = _sinal_para_posicao(
+            m,
+            an,
+            peso_setor=peso_por_setor.get(e.setor),
+            usar_tese=usar_tese,
+        )
+        linhas.append(
+            LinhaCarteiraRelatorio(
+                ticker=t,
+                quantidade=float(e.quantidade),
+                preco_medio=float(e.preco_medio),
+                preco_atual=e.preco_atual,
+                custo=float(e.custo),
+                valor_mercado=e.valor_mercado,
+                resultado_pct=e.resultado_pct,
+                peso_pct=e.peso_pct,
+                setor=e.setor,
+                var_dia=m.var_dia if m else None,
+                var_mes=m.var_mes if m else None,
+                sinal=sinal,
+                resumo=sinal.resumo,
+            )
+        )
+
+    linhas.sort(key=lambda L: -(L.peso_pct or 0.0))
+    reforcar, revisar = _listas_reforcar_revisar(linhas)
+    tickers_pos = {L.ticker for L in linhas}
+    return CarteiraRelatorio(
+        patrimonio=patrimonio,
+        custo_total=custo_total,
+        resultado_pct=resultado_total,
+        linhas=linhas,
+        reforcar=reforcar,
+        revisar=revisar,
+        noticia_ids=_noticia_ids_da_carteira(tickers_pos, noticias, an_not),
+    )
+
+
 def gerar_relatorio(
     *,
     empresas_path: Path | None = None,
@@ -553,25 +819,43 @@ def gerar_relatorio(
     horas: int = 36,
 ) -> Relatorio:
     agora = agora_brt()
+    avisos: list[str] = []
+    posicoes = listar_posicoes()
+    if posicoes:
+        avisos.extend(garantir_acoes_das_posicoes(posicoes))
+
     itens = _itens_carteira()
     empresas = load_empresas(empresas_path)
     tickers = [i.ticker for i in itens]
     if not tickers:
+        carteira_vazia = montar_carteira_relatorio(
+            posicoes, [], {}, [], an_not={}, empresas=empresas, usar_tese=False
+        )
         return Relatorio(
             gerado_em=agora,
             metricas=[],
             noticias=[],
             analise_noticias={},
             analise_acoes={},
-            resumo_mercado="Nenhuma ação salva no banco. Cadastre tickers na calculadora antes de gerar o relatório.",
+            resumo_mercado=(
+                "Nenhuma ação salva no banco. Cadastre tickers na calculadora "
+                "(ou posições na Carteira) antes de gerar o relatório."
+            ),
             motor="regras",
-            avisos=["Carteira vazia."],
+            avisos=avisos + ["Nenhuma ação salva."],
+            carteira=carteira_vazia,
         )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         futuro_noticias = pool.submit(buscar_noticias, horas=horas)
-        metricas = list(pool.map(lambda i: calcular_metricas(i, empresas.get(raiz_ticker(i.ticker))), itens))
-        todas, avisos = futuro_noticias.result()
+        metricas = list(
+            pool.map(
+                lambda i: calcular_metricas(i, empresas.get(raiz_ticker(i.ticker))),
+                itens,
+            )
+        )
+        todas, avisos_news = futuro_noticias.result()
+    avisos.extend(avisos_news)
 
     ligar_noticias(todas, tickers, empresas)
     relevantes = [n for n in todas if n.relevante]
@@ -582,18 +866,46 @@ def gerar_relatorio(
     destaques: list[str] = []
     motor = "regras"
 
+    _anexar_sinais(metricas, an_acoes)
+    carteira = montar_carteira_relatorio(
+        posicoes,
+        metricas,
+        an_acoes,
+        relevantes,
+        an_not=an_not,
+        empresas=empresas,
+        usar_tese=True,
+    )
+
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if usar_ia and api_key:
         modelos = gemini_modelos()
         try:
             dados, modelo = chamar_gemini(
-                _prompt(metricas, relevantes, agora.strftime("%d/%m/%Y")),
+                _prompt(
+                    metricas,
+                    relevantes,
+                    agora.strftime("%d/%m/%Y"),
+                    carteira=carteira,
+                ),
                 api_key=api_key,
                 modelos=modelos,
             )
-            resumo_ia, destaques = _aplicar_ia(dados, metricas, relevantes, an_not, an_acoes)
+            resumo_ia, destaques = _aplicar_ia(
+                dados, metricas, relevantes, an_not, an_acoes
+            )
             resumo = resumo_ia or resumo
             motor = modelo
+            _anexar_sinais(metricas, an_acoes)
+            carteira = montar_carteira_relatorio(
+                posicoes,
+                metricas,
+                an_acoes,
+                relevantes,
+                an_not=an_not,
+                empresas=empresas,
+                usar_tese=True,
+            )
         except Exception as exc:  # noqa: BLE001
             avisos.append(f"IA indisponível, usei análise simples: {exc}")
             resumo = (
@@ -607,8 +919,6 @@ def gerar_relatorio(
         for e in m.erros:
             avisos.append(f"{m.ticker}: {e}")
 
-    _anexar_sinais(metricas, an_acoes)
-
     return Relatorio(
         gerado_em=agora,
         metricas=metricas,
@@ -619,6 +929,7 @@ def gerar_relatorio(
         destaques=destaques,
         motor=motor,
         avisos=avisos,
+        carteira=carteira,
     )
 
 
@@ -733,6 +1044,163 @@ def _noticias_ordenadas(rel: Relatorio) -> list[Noticia]:
     return sorted([n for n in rel.noticias if n.id in rel.analise_noticias], key=chave)
 
 
+def _fmt_rs(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _html_secao_carteira(rel: Relatorio) -> list[str]:
+    """Blocos Minha carteira / O que fazer hoje / Notícias da carteira."""
+    cart = rel.carteira
+    h: list[str] = ["<h3>Minha carteira</h3>"]
+    if cart is None or not cart.linhas:
+        h.append(
+            '<p style="color:#64748b;font-size:13px">Cadastre posições na página '
+            "<b>Carteira</b> para ver património, P&amp;L e o que reforçar/revisar.</p>"
+        )
+        return h
+
+    res_tot = _pct(cart.resultado_pct)
+    h.append(
+        f'<p style="font-size:14px;line-height:1.5">'
+        f"<b>Património:</b> {_fmt_rs(cart.patrimonio)} · "
+        f"<b>Custo:</b> {_fmt_rs(cart.custo_total)} · "
+        f"<b>Resultado vs PM:</b> "
+        f'<span style="color:{_cor_pct(cart.resultado_pct)}">{res_tot}</span>'
+        f" · {len(cart.linhas)} posição(ões)</p>"
+    )
+    h.append(
+        '<table style="border-collapse:collapse;width:100%;font-size:13px">'
+        '<tr style="background:#f1f5f9;text-align:left">'
+        '<th style="padding:6px">Ticker</th>'
+        '<th style="padding:6px;text-align:right">Qtd</th>'
+        '<th style="padding:6px;text-align:right">PM</th>'
+        '<th style="padding:6px;text-align:right">Preço</th>'
+        '<th style="padding:6px;text-align:right">Resultado</th>'
+        '<th style="padding:6px;text-align:right">Peso</th>'
+        '<th style="padding:6px;text-align:right">Dia</th>'
+        '<th style="padding:6px;text-align:right">Mês</th>'
+        '<th style="padding:6px">Sinal</th></tr>'
+    )
+    for L in cart.linhas:
+        sinal_html = _badge_sinal(L.sinal) if L.sinal else "—"
+        peso = "—" if L.peso_pct is None else f"{L.peso_pct * 100:.1f}%".replace(".", ",")
+        h.append(
+            '<tr style="border-bottom:1px solid #e2e8f0">'
+            f'<td style="padding:6px"><b>{_e(L.ticker)}</b></td>'
+            f'<td style="padding:6px;text-align:right">{L.quantidade:g}</td>'
+            f'<td style="padding:6px;text-align:right">{_fmt_rs(L.preco_medio)}</td>'
+            f'<td style="padding:6px;text-align:right">{_fmt_rs(L.preco_atual)}</td>'
+            + _td_pct(L.resultado_pct)
+            + f'<td style="padding:6px;text-align:right">{peso}</td>'
+            + _td_pct(L.var_dia)
+            + _td_pct(L.var_mes)
+            + f'<td style="padding:6px">{sinal_html}</td></tr>'
+        )
+    h.append("</table>")
+    h.append(
+        '<p style="color:#64748b;font-size:12px">Resultado = preço atual vs preço médio. '
+        "Sinal = indicativo (Comprar / Esperar / Evitar), não é ordem de compra ou venda.</p>"
+    )
+
+    h.append("<h3>O que fazer hoje</h3>")
+    h.append(
+        '<p style="color:#64748b;font-size:12px;margin-top:0">'
+        "Leitura automática da carteira — reforçar ≠ ordem de compra; "
+        "revisar ≠ ordem de venda.</p>"
+    )
+    if cart.reforcar:
+        h.append("<b>Reforçar (leitura Comprar)</b><ul>")
+        for x in cart.reforcar:
+            h.append(
+                f"<li><b>{_e(x.ticker)}</b> — {_e(x.rotulo)}: {_e(x.resumo)}</li>"
+            )
+        h.append("</ul>")
+    else:
+        h.append(
+            '<p style="font-size:13px;color:#64748b">Nenhuma posição com leitura '
+            "<b>Comprar</b> no momento.</p>"
+        )
+    if cart.revisar:
+        h.append("<b>Revisar ou reduzir (leitura cautelosa)</b><ul>")
+        for x in cart.revisar:
+            h.append(
+                f"<li><b>{_e(x.ticker)}</b> — {_e(x.rotulo)}: {_e(x.resumo)}</li>"
+            )
+        h.append("</ul>")
+    else:
+        h.append(
+            '<p style="font-size:13px;color:#64748b">Nenhuma posição marcada para '
+            "revisão prioritária.</p>"
+        )
+
+    h.append("<h3>Notícias da carteira</h3>")
+    por_id = {n.id: n for n in rel.noticias}
+    noticias_cart = [por_id[i] for i in cart.noticia_ids if i in por_id]
+    if not noticias_cart:
+        h.append(
+            '<p style="color:#64748b;font-size:13px">Nenhuma notícia recente citando '
+            "diretamente as posições da carteira.</p>"
+        )
+    else:
+        for n in noticias_cart[:12]:
+            an = rel.analise_noticias.get(n.id)
+            impacto = an.impacto if an else "neutro"
+            h.append(
+                '<div style="padding:6px 0;border-bottom:1px solid #e2e8f0">'
+                f'<a href="{_e(n.link)}" style="font-weight:600;color:#1d4ed8">'
+                f"{_e(n.titulo)}</a> {_badge(impacto)}<br>"
+                f'<span style="color:#64748b;font-size:12px">{_e(n.fonte)} · '
+                f"afeta {', '.join(_e(t) for t in (n.acoes_diretas or n.acoes or [])[:6])}"
+                f"</span></div>"
+            )
+    return h
+
+
+def _texto_secao_carteira(rel: Relatorio) -> list[str]:
+    cart = rel.carteira
+    linhas = ["", "MINHA CARTEIRA"]
+    if cart is None or not cart.linhas:
+        linhas.append(
+            "Cadastre posições na página Carteira para ver património e sinais."
+        )
+        return linhas
+    linhas.append(
+        f"Património {_fmt_rs(cart.patrimonio)} · custo {_fmt_rs(cart.custo_total)} · "
+        f"resultado vs PM {_pct(cart.resultado_pct)} · {len(cart.linhas)} posições"
+    )
+    for L in cart.linhas:
+        rotulo = L.sinal.rotulo if L.sinal else "—"
+        linhas.append(
+            f"{L.ticker} qtd {L.quantidade:g} · PM {_fmt_rs(L.preco_medio)} · "
+            f"preço {_fmt_rs(L.preco_atual)} · result {_pct(L.resultado_pct)} · "
+            f"peso {_pct(L.peso_pct)} · dia {_pct(L.var_dia)} · mês {_pct(L.var_mes)} · "
+            f"{rotulo}"
+        )
+    linhas += ["", "O QUE FAZER HOJE (indicativo)"]
+    if cart.reforcar:
+        linhas.append("Reforçar:")
+        for x in cart.reforcar:
+            linhas.append(f"- {x.ticker} ({x.rotulo}): {x.resumo}")
+    else:
+        linhas.append("Reforçar: nenhuma posição com leitura Comprar.")
+    if cart.revisar:
+        linhas.append("Revisar / reduzir:")
+        for x in cart.revisar:
+            linhas.append(f"- {x.ticker} ({x.rotulo}): {x.resumo}")
+    else:
+        linhas.append("Revisar: nenhuma posição prioritária.")
+    linhas += ["", "NOTÍCIAS DA CARTEIRA"]
+    por_id = {n.id: n for n in rel.noticias}
+    news = [por_id[i] for i in cart.noticia_ids if i in por_id]
+    if not news:
+        linhas.append("Nenhuma notícia direta das posições.")
+    for n in news[:12]:
+        linhas.append(f"- {n.titulo} ({n.fonte}) {n.link}")
+    return linhas
+
+
 def renderizar_html(rel: Relatorio) -> str:
     data_txt = rel.gerado_em.strftime("%d/%m/%Y %H:%M")
     por_id = {n.id: n for n in rel.noticias}
@@ -746,6 +1214,8 @@ def renderizar_html(rel: Relatorio) -> str:
     ]
     if rel.destaques:
         h.append("<ul>" + "".join(f"<li>{_e(d)}</li>" for d in rel.destaques) + "</ul>")
+
+    h.extend(_html_secao_carteira(rel))
 
     h.append("<h3>Suas ações por setor</h3>")
     for setor, grupo in _grupos_por_setor(rel):
@@ -850,6 +1320,7 @@ def renderizar_texto(rel: Relatorio) -> str:
     linhas += ["CENÁRIO DO DIA", rel.resumo_mercado, ""]
     for d in rel.destaques:
         linhas.append(f"- {d}")
+    linhas.extend(_texto_secao_carteira(rel))
     linhas += ["", "SUAS AÇÕES POR SETOR"]
     for setor, grupo in _grupos_por_setor(rel):
         linhas.append(f"\n## {rotulo_setor(setor)} ({len(grupo)})")
