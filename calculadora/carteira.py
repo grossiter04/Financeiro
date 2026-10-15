@@ -6,8 +6,7 @@ import csv
 import io
 import re
 from collections import defaultdict
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from statistics import mean
@@ -20,7 +19,7 @@ from calculadora.core import (
     parse_proventos,
     selecionar_anos,
 )
-from calculadora.preco import Historico, RANGES_HISTORICO, fetch_historico, fetch_preco
+from calculadora.preco import fetch_preco
 from calculadora.proventos_fetch import fetch_proventos
 from calculadora.storage import (
     PosicaoSalva,
@@ -202,114 +201,6 @@ def export_csv_carteira(posicoes: list[Posicao] | list[PosicaoSalva]) -> str:
     for p in posicoes:
         w.writerow([p.ticker, f"{p.quantidade:g}", f"{p.preco_medio:.4f}".rstrip("0").rstrip(".")])
     return buf.getvalue()
-
-
-@dataclass
-class SeriePatrimonio:
-    """Evolução aproximada: qty atual × fechamentos históricos."""
-
-    periodo: str
-    datas: list[date] = field(default_factory=list)
-    patrimonio: list[float] = field(default_factory=list)
-    custo: list[float] = field(default_factory=list)
-    contribuicoes: dict[str, float] = field(default_factory=dict)
-    avisos: list[str] = field(default_factory=list)
-
-    @property
-    def var_periodo(self) -> float | None:
-        if len(self.patrimonio) < 2 or self.patrimonio[0] <= 0:
-            return None
-        return self.patrimonio[-1] / self.patrimonio[0] - 1.0
-
-    @property
-    def resultado_vs_custo(self) -> float | None:
-        if not self.patrimonio or not self.custo or self.custo[-1] <= 0:
-            return None
-        return self.patrimonio[-1] / self.custo[-1] - 1.0
-
-
-def serie_patrimonio_aprox(
-    posicoes: Sequence[Posicao] | Sequence[PosicaoSalva],
-    *,
-    periodo: str = "1y",
-    fetch_hist: Callable[..., Historico] | None = None,
-) -> SeriePatrimonio:
-    """
-    Reconstrói o património no período com as posições **atuais**.
-
-    Não reflete compras/vendas passadas — só qty de hoje × preço de cada dia.
-    """
-    periodo = (periodo or "1y").strip()
-    if periodo not in RANGES_HISTORICO:
-        raise ValueError(f"período inválido: {periodo!r}")
-
-    fetch = fetch_hist or fetch_historico
-    avisos: list[str] = []
-    series: dict[str, dict[date, float]] = {}
-    quantidades: dict[str, float] = {}
-    custo_total = 0.0
-
-    for p in posicoes:
-        t = str(p.ticker).strip().upper()
-        qtd = float(p.quantidade)
-        if not t or qtd <= 0:
-            continue
-        quantidades[t] = quantidades.get(t, 0.0) + qtd
-        custo_total += qtd * float(p.preco_medio)
-        try:
-            hist = fetch(t, periodo=periodo)
-        except Exception as exc:  # noqa: BLE001
-            avisos.append(f"{t}: histórico indisponível ({exc})")
-            continue
-        series[t] = {pt.data: float(pt.preco) for pt in hist.pontos if pt.preco > 0}
-
-    if not series:
-        return SeriePatrimonio(periodo=periodo, avisos=avisos or ["Sem histórico."])
-
-    todas_datas = sorted({d for serie in series.values() for d in serie})
-    # Forward-fill por ticker
-    ultimo: dict[str, float | None] = {t: None for t in series}
-    patrimonio: list[float] = []
-    custo_serie: list[float] = []
-    datas_ok: list[date] = []
-
-    for d in todas_datas:
-        for t, serie in series.items():
-            if d in serie:
-                ultimo[t] = serie[d]
-        nav = 0.0
-        tem = False
-        for t, qtd in quantidades.items():
-            px = ultimo.get(t)
-            if px is None:
-                continue
-            nav += qtd * px
-            tem = True
-        if not tem or nav <= 0:
-            continue
-        datas_ok.append(d)
-        patrimonio.append(nav)
-        custo_serie.append(custo_total)
-
-    contribuicoes: dict[str, float] = {}
-    for t, qtd in quantidades.items():
-        serie = series.get(t)
-        if not serie:
-            continue
-        dias = sorted(serie)
-        if len(dias) < 2:
-            continue
-        delta = qtd * (serie[dias[-1]] - serie[dias[0]])
-        contribuicoes[t] = delta
-
-    return SeriePatrimonio(
-        periodo=periodo,
-        datas=datas_ok,
-        patrimonio=patrimonio,
-        custo=custo_serie,
-        contribuicoes=contribuicoes,
-        avisos=avisos,
-    )
 
 
 def enriquecer_posicoes(

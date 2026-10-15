@@ -23,7 +23,6 @@ from calculadora.carteira import (
     PosicaoEnriquecida,
     enriquecer_posicoes,
     garantir_acoes_das_posicoes,
-    serie_patrimonio_aprox,
 )
 from calculadora.fundamentos import fetch_fundamentos
 from calculadora.mail import BRT, agora_brt, enviar_email, smtp_config_from_env
@@ -36,7 +35,7 @@ from calculadora.noticias import (
     load_empresas,
     raiz_ticker,
 )
-from calculadora.preco import RANGES_HISTORICO, fetch_historico
+from calculadora.preco import fetch_historico
 from calculadora.proventos_fetch import fetch_proventos
 from calculadora.setores import agrupar_por_setor, normalizar_setor, rotulo_setor
 from calculadora.gemini_client import (
@@ -160,15 +159,6 @@ class CarteiraRelatorio:
     reforcar: list[ItemAcaoCarteira] = field(default_factory=list)
     revisar: list[ItemAcaoCarteira] = field(default_factory=list)
     noticia_ids: list[str] = field(default_factory=list)
-    # Análise / evolução (qty atual × preços históricos)
-    periodo_evolucao: str = "3mo"
-    var_periodo: float | None = None
-    patrimonio_inicio: float | None = None
-    patrimonio_fim: float | None = None
-    contribuicoes: dict[str, float] = field(default_factory=dict)
-    serie_patrimonio: list[float] = field(default_factory=list)
-    serie_custo: list[float] = field(default_factory=list)
-    avisos_evolucao: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -492,31 +482,19 @@ def _prompt(
             for L in carteira.linhas
         ]
         bloco_carteira = f"""
-CARTEIRA REAL DO INVESTIDOR (posições, evolução aprox. e sinais):
+CARTEIRA REAL DO INVESTIDOR (posições com peso e resultado vs preço médio):
 {json.dumps({
     "patrimonio_aprox": round(carteira.patrimonio, 2),
     "resultado_total_vs_custo_pct": (
         None if carteira.resultado_pct is None
         else round(carteira.resultado_pct * 100, 1)
     ),
-    "periodo_evolucao": carteira.periodo_evolucao,
-    "var_periodo_pct": (
-        None if carteira.var_periodo is None
-        else round(carteira.var_periodo * 100, 1)
-    ),
-    "quem_mais_moveu": [
-        {"ticker": t, "delta_rs": round(v, 2)}
-        for t, v in sorted(
-            carteira.contribuicoes.items(), key=lambda kv: -abs(kv[1])
-        )[:5]
-    ],
     "posicoes": pos_json,
     "reforcar": [x.ticker for x in carteira.reforcar],
     "revisar": [x.ticker for x in carteira.revisar],
 }, ensure_ascii=False)}
-No "resumo_mercado", inclua 2 a 4 frases sobre ESSA carteira (evolução no
-período, quem mais moveu, pesos, sinais, notícias). Use só tickers listados
-em posicoes — não invente papéis.
+No "resumo_mercado", inclua 2 a 4 frases sobre ESSA carteira (pesos, sinais,
+notícias das posições). Use só tickers listados em posicoes — não invente papéis.
 """
     return f"""Você é um analista de ações brasileiras. Hoje é {data_txt}.
 O investidor acompanha as ações abaixo (foco em dividendos; margem negativa = preço abaixo do teto, ou seja, barata).
@@ -756,17 +734,10 @@ def montar_carteira_relatorio(
     an_not: dict[str, AnaliseNoticia] | None = None,
     empresas: dict[str, Empresa] | None = None,
     usar_tese: bool = True,
-    periodo_evolucao: str = "3mo",
-    incluir_evolucao: bool = True,
-    fetch_hist: object | None = None,
 ) -> CarteiraRelatorio:
     """Monta o bloco Minha carteira a partir das posições reais."""
     if not posicoes:
         return CarteiraRelatorio()
-
-    periodo = (periodo_evolucao or "3mo").strip()
-    if periodo not in RANGES_HISTORICO:
-        periodo = "3mo"
 
     por_m = {m.ticker.upper(): m for m in metricas}
     setores: dict[str, str] = {}
@@ -830,31 +801,6 @@ def montar_carteira_relatorio(
     linhas.sort(key=lambda L: -(L.peso_pct or 0.0))
     reforcar, revisar = _listas_reforcar_revisar(linhas)
     tickers_pos = {L.ticker for L in linhas}
-
-    var_periodo: float | None = None
-    patrimonio_inicio: float | None = None
-    patrimonio_fim: float | None = None
-    contribuicoes: dict[str, float] = {}
-    serie_pat: list[float] = []
-    serie_custo: list[float] = []
-    avisos_evo: list[str] = []
-    if incluir_evolucao:
-        kwargs: dict = {"periodo": periodo}
-        if fetch_hist is not None:
-            kwargs["fetch_hist"] = fetch_hist
-        try:
-            serie = serie_patrimonio_aprox(posicoes, **kwargs)
-            avisos_evo = list(serie.avisos)
-            var_periodo = serie.var_periodo
-            if serie.patrimonio:
-                patrimonio_inicio = serie.patrimonio[0]
-                patrimonio_fim = serie.patrimonio[-1]
-                serie_pat = list(serie.patrimonio)
-                serie_custo = list(serie.custo)
-            contribuicoes = dict(serie.contribuicoes)
-        except Exception as exc:  # noqa: BLE001
-            avisos_evo.append(f"Evolução indisponível: {exc}")
-
     return CarteiraRelatorio(
         patrimonio=patrimonio,
         custo_total=custo_total,
@@ -863,14 +809,6 @@ def montar_carteira_relatorio(
         reforcar=reforcar,
         revisar=revisar,
         noticia_ids=_noticia_ids_da_carteira(tickers_pos, noticias, an_not),
-        periodo_evolucao=periodo,
-        var_periodo=var_periodo,
-        patrimonio_inicio=patrimonio_inicio,
-        patrimonio_fim=patrimonio_fim,
-        contribuicoes=contribuicoes,
-        serie_patrimonio=serie_pat,
-        serie_custo=serie_custo,
-        avisos_evolucao=avisos_evo,
     )
 
 
@@ -1166,8 +1104,6 @@ def _html_secao_carteira(rel: Relatorio) -> list[str]:
         "Sinal = indicativo (Comprar / Esperar / Evitar), não é ordem de compra ou venda.</p>"
     )
 
-    h.extend(_html_analise_evolucao(cart))
-
     h.append("<h3>O que fazer hoje</h3>")
     h.append(
         '<p style="color:#64748b;font-size:12px;margin-top:0">'
@@ -1222,95 +1158,6 @@ def _html_secao_carteira(rel: Relatorio) -> list[str]:
     return h
 
 
-def _html_analise_evolucao(cart: CarteiraRelatorio) -> list[str]:
-    """Métricas de evolução + contribuições (compatível com e-mail HTML)."""
-    h: list[str] = ["<h3>Análise e evolução</h3>"]
-    rotulo_periodo = RANGES_HISTORICO.get(
-        cart.periodo_evolucao, cart.periodo_evolucao
-    )
-    h.append(
-        f'<p style="color:#64748b;font-size:12px;margin-top:0">'
-        f"Período: <b>{_e(rotulo_periodo)}</b>. Aproximação com qty atual × preços "
-        "históricos (não reflete compras/vendas no meio do período).</p>"
-    )
-    if cart.patrimonio_inicio is None or cart.var_periodo is None:
-        h.append(
-            '<p style="font-size:13px;color:#64748b">Sem série suficiente para '
-            "mostrar a evolução neste período.</p>"
-        )
-        return h
-
-    h.append(
-        f'<p style="font-size:14px;line-height:1.6">'
-        f"<b>Início:</b> {_fmt_rs(cart.patrimonio_inicio)} · "
-        f"<b>Fim:</b> {_fmt_rs(cart.patrimonio_fim)} · "
-        f"<b>Var. no período:</b> "
-        f'<span style="color:{_cor_pct(cart.var_periodo)}">'
-        f"{_pct(cart.var_periodo)}</span></p>"
-    )
-    spark = _html_sparkline(cart.serie_patrimonio)
-    if spark:
-        h.append(spark)
-
-    if cart.contribuicoes:
-        h.append("<b>Quem mais moveu no período</b> (Δ valor = qty × Δ preço)")
-        h.append(
-            '<table style="border-collapse:collapse;width:100%;font-size:13px;'
-            'margin-top:6px">'
-            '<tr style="background:#f1f5f9">'
-            '<th style="padding:6px;text-align:left">Ticker</th>'
-            '<th style="padding:6px;text-align:right">Δ R$</th>'
-            '<th style="padding:6px;width:45%">Contribuição</th></tr>'
-        )
-        max_abs = max(abs(v) for v in cart.contribuicoes.values()) or 1.0
-        for t, delta in sorted(
-            cart.contribuicoes.items(), key=lambda kv: -abs(kv[1])
-        )[:10]:
-            pct_bar = min(100.0, abs(delta) / max_abs * 100.0)
-            cor = "#15803d" if delta >= 0 else "#b91c1c"
-            h.append(
-                '<tr style="border-bottom:1px solid #e2e8f0">'
-                f'<td style="padding:6px"><b>{_e(t)}</b></td>'
-                f'<td style="padding:6px;text-align:right;color:{cor}">'
-                f"{_fmt_rs(delta)}</td>"
-                f'<td style="padding:6px">'
-                f'<div style="background:#e2e8f0;height:10px;border-radius:4px">'
-                f'<div style="background:{cor};height:10px;border-radius:4px;'
-                f'width:{pct_bar:.0f}%"></div></div></td></tr>'
-            )
-        h.append("</table>")
-    return h
-
-
-def _html_sparkline(valores: list[float], *, width: int = 320, height: int = 64) -> str:
-    """Mini gráfico em tabela HTML (sem SVG — melhor suporte em clientes de e-mail)."""
-    if len(valores) < 2:
-        return ""
-    # Amostra até 40 pontos
-    n = len(valores)
-    step = max(1, n // 40)
-    amostra = valores[::step] or valores
-    lo, hi = min(amostra), max(amostra)
-    span = (hi - lo) or 1.0
-    cells: list[str] = []
-    for v in amostra:
-        # altura da barra 8–100%
-        pct_h = 8 + int(92 * (v - lo) / span)
-        cells.append(
-            f'<td style="padding:0;vertical-align:bottom;height:{height}px">'
-            f'<div style="background:#0d9488;width:6px;height:{pct_h}%;'
-            f'margin:0 1px;border-radius:2px 2px 0 0"></div></td>'
-        )
-    return (
-        f'<div style="margin:8px 0 4px;color:#64748b;font-size:12px">'
-        f"Evolução do património (aprox.)</div>"
-        f'<table style="border-collapse:collapse;width:{width}px" cellpadding="0" '
-        f'cellspacing="0"><tr style="height:{height}px">'
-        + "".join(cells)
-        + "</tr></table>"
-    )
-
-
 def _texto_secao_carteira(rel: Relatorio) -> list[str]:
     cart = rel.carteira
     linhas = ["", "MINHA CARTEIRA"]
@@ -1331,24 +1178,6 @@ def _texto_secao_carteira(rel: Relatorio) -> list[str]:
             f"peso {_pct(L.peso_pct)} · dia {_pct(L.var_dia)} · mês {_pct(L.var_mes)} · "
             f"{rotulo}"
         )
-    linhas += ["", "ANÁLISE E EVOLUÇÃO"]
-    rotulo_periodo = RANGES_HISTORICO.get(
-        cart.periodo_evolucao, cart.periodo_evolucao
-    )
-    linhas.append(f"Período: {rotulo_periodo} (qty atual × preços históricos)")
-    if cart.var_periodo is not None:
-        linhas.append(
-            f"Início {_fmt_rs(cart.patrimonio_inicio)} → fim {_fmt_rs(cart.patrimonio_fim)} · "
-            f"var {_pct(cart.var_periodo)}"
-        )
-    else:
-        linhas.append("Sem série de evolução neste período.")
-    if cart.contribuicoes:
-        linhas.append("Quem mais moveu:")
-        for t, delta in sorted(
-            cart.contribuicoes.items(), key=lambda kv: -abs(kv[1])
-        )[:10]:
-            linhas.append(f"- {t}: {_fmt_rs(delta)}")
     linhas += ["", "O QUE FAZER HOJE (indicativo)"]
     if cart.reforcar:
         linhas.append("Reforçar:")
