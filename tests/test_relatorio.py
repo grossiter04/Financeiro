@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from calculadora.mail import BRT
 from calculadora.noticias import Noticia
 from calculadora.relatorio import (
@@ -16,6 +18,7 @@ from calculadora.relatorio import (
     renderizar_texto,
     sentimento_de_diretas,
 )
+from calculadora.preco import Historico, PontoHistorico
 from calculadora.sinal import SinalOrientativo
 from calculadora.storage import PosicaoSalva
 
@@ -190,6 +193,7 @@ def test_montar_carteira_relatorio_com_posicoes():
         noticias,
         an_not=an_not,
         usar_tese=False,
+        incluir_evolucao=False,
     )
     assert len(cart.linhas) == 2
     assert cart.patrimonio > 0
@@ -206,6 +210,45 @@ def test_montar_carteira_vazia():
     assert cart.linhas == []
     assert cart.reforcar == []
     assert cart.patrimonio == 0
+
+
+def test_montar_carteira_com_evolucao_mock():
+    from datetime import date
+
+    metricas, noticias = _dados()
+    an_not, an_acoes, _ = analise_por_regras(metricas, noticias)
+    posicoes = [
+        PosicaoSalva(
+            ticker="PETR4", quantidade=100, preco_medio=28.0, updated_at="2026-10-06"
+        ),
+    ]
+
+    def fake_hist(ticker: str, *, periodo: str = "3mo") -> Historico:
+        return Historico(
+            ticker=ticker,
+            pontos=[
+                PontoHistorico(date(2026, 1, 2), 28.0),
+                PontoHistorico(date(2026, 1, 3), 30.0),
+            ],
+            periodo=periodo,
+            fonte="teste",
+        )
+
+    cart = montar_carteira_relatorio(
+        posicoes,
+        metricas,
+        an_acoes,
+        noticias,
+        an_not=an_not,
+        usar_tese=False,
+        periodo_evolucao="3mo",
+        incluir_evolucao=True,
+        fetch_hist=fake_hist,
+    )
+    assert cart.var_periodo == pytest.approx(30 / 28 - 1)
+    assert cart.patrimonio_inicio == pytest.approx(2800)
+    assert cart.patrimonio_fim == pytest.approx(3000)
+    assert cart.contribuicoes.get("PETR4") == pytest.approx(200.0)
 
 
 def test_render_html_com_carteira_preenchida():
@@ -249,6 +292,13 @@ def test_render_html_com_carteira_preenchida():
             )
         ],
         noticia_ids=["n1"],
+        periodo_evolucao="3mo",
+        var_periodo=0.15,
+        patrimonio_inicio=2600.0,
+        patrimonio_fim=3000.0,
+        contribuicoes={"PETR4": 400.0},
+        serie_patrimonio=[2600.0, 2700.0, 2800.0, 3000.0],
+        serie_custo=[2800.0, 2800.0, 2800.0, 2800.0],
     )
     rel = Relatorio(
         datetime(2026, 10, 6, 9, 37, tzinfo=BRT),
@@ -263,10 +313,13 @@ def test_render_html_com_carteira_preenchida():
     assert "Minha carteira" in html
     assert "O que fazer hoje" in html
     assert "Notícias da carteira" in html
+    assert "Análise e evolução" in html
+    assert "Quem mais moveu" in html
     assert "Reforçar" in html
     assert "PETR4" in html
     assert "Petrobras dispara" in html
     texto = renderizar_texto(rel)
     assert "MINHA CARTEIRA" in texto
+    assert "ANÁLISE E EVOLUÇÃO" in texto
     assert "O QUE FAZER HOJE" in texto
     assert "Reforçar:" in texto

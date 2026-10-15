@@ -945,6 +945,48 @@ def chart_linha(
     _render_altair(chart, height=height)
 
 
+def chart_linhas(
+    df,
+    *,
+    y_cols: list[str],
+    height: int = 280,
+) -> None:
+    """Várias séries no mesmo gráfico (ex.: Patrimônio × Custo)."""
+    import altair as alt
+
+    if df is None or len(df) == 0 or not y_cols:
+        return
+    plot = df.reset_index()
+    x_col = plot.columns[0]
+    cols = [c for c in y_cols if c in plot.columns]
+    if not cols:
+        return
+    long = plot.melt(id_vars=[x_col], value_vars=cols, var_name="Serie", value_name="Valor")
+    t = tokens_tema()
+    chart = (
+        alt.Chart(long)
+        .mark_line(strokeWidth=2)
+        .encode(
+            x=alt.X(f"{x_col}:T", title=None),
+            y=alt.Y("Valor:Q", title="R$"),
+            color=alt.Color(
+                "Serie:N",
+                scale=alt.Scale(
+                    domain=cols,
+                    range=[t["accent"], t.get("muted", "#94a3b8")],
+                ),
+                legend=alt.Legend(title=None, orient="bottom"),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{x_col}:T", title="Data"),
+                alt.Tooltip("Serie:N", title="Série"),
+                alt.Tooltip("Valor:Q", title="R$", format=".2f"),
+            ],
+        )
+    )
+    _render_altair(chart, height=height)
+
+
 def chart_barras_horiz(
     dados: dict[str, float | int],
     *,

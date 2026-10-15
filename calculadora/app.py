@@ -34,6 +34,7 @@ from calculadora.carteira import (
     posicoes_de_editor,
     push_undo_carteira,
     rotulo_mes_curto,
+    serie_patrimonio_aprox,
 )
 from calculadora.classes import (
     AnalisePrecoUnit,
@@ -104,6 +105,7 @@ from calculadora.ui_theme import (
     card_secao,
     chart_barras_horiz,
     chart_linha,
+    chart_linhas,
     chart_pizza_setores,
     definir_tema,
     html_table,
@@ -1992,6 +1994,51 @@ def _render_pagina_carteira() -> None:
     with col_pie:
         section_label("Por setor")
         chart_pizza_setores(list(peso_setor.items()), height=280)
+
+    section_label("Análise da carteira")
+    st.caption(
+        "Evolução aproximada: quantidade atual × preços históricos. "
+        "Não reflete compras/vendas feitas no meio do período."
+    )
+    opcoes_periodo = list(RANGES_HISTORICO.keys())
+    periodo_cart = st.selectbox(
+        "Período",
+        options=opcoes_periodo,
+        index=opcoes_periodo.index("1y") if "1y" in opcoes_periodo else 0,
+        format_func=lambda k: RANGES_HISTORICO[k],
+        key="carteira_hist_periodo",
+    )
+    with st.spinner("Montando evolução do património…"):
+        serie = serie_patrimonio_aprox(posicoes, periodo=periodo_cart)
+    if serie.avisos:
+        with st.expander("Avisos do histórico", expanded=False):
+            for a in serie.avisos[:12]:
+                st.caption(a)
+    if len(serie.datas) >= 2:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Var. no período", _fmt_pct(serie.var_periodo))
+        m2.metric("Patrimônio (fim)", _fmt_brl(serie.patrimonio[-1]))
+        m3.metric("Vs custo (PM)", _fmt_pct(serie.resultado_vs_custo))
+        df_nav = pd.DataFrame(
+            {
+                "Patrimônio": serie.patrimonio,
+                "Custo (qty × PM)": serie.custo,
+            },
+            index=pd.to_datetime(serie.datas),
+        )
+        chart_linhas(df_nav, y_cols=["Patrimônio", "Custo (qty × PM)"], height=300)
+        if serie.contribuicoes:
+            section_label("Quem mais moveu no período")
+            st.caption("Variação do valor de mercado de cada papel (qty atual × Δ preço).")
+            contrib_ord = dict(
+                sorted(serie.contribuicoes.items(), key=lambda kv: -abs(kv[1]))[:10]
+            )
+            chart_barras_horiz(
+                {t: round(v, 2) for t, v in contrib_ord.items()},
+                height=max(180, 28 * len(contrib_ord)),
+            )
+    else:
+        st.caption("Não foi possível montar a série de património neste período.")
 
     rows_cart: list[list[object]] = []
     for e in sorted(enriq, key=lambda x: -(x.peso_pct or 0)):

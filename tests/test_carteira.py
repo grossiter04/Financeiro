@@ -26,8 +26,10 @@ from calculadora.carteira import (
     dy_estimado,
     preco_medio_apos_compra,
     push_undo_carteira,
+    serie_patrimonio_aprox,
     snapshot_posicoes,
 )
+from calculadora.preco import Historico, PontoHistorico
 from calculadora.storage import (
     listar_posicoes,
     obter_acao,
@@ -98,6 +100,36 @@ def test_enriquecer_sem_preco():
     assert enriq[0].valor_mercado is None
     assert enriq[0].peso_pct is None
     assert enriq[0].resultado_pct is None
+
+
+def test_serie_patrimonio_aprox_com_fetch_mock():
+    pos = [
+        Posicao("AAA3", 10, 10.0),  # custo 100
+        Posicao("BBB3", 5, 20.0),  # custo 100
+    ]
+
+    def fake_hist(ticker: str, *, periodo: str = "1y") -> Historico:
+        if ticker == "AAA3":
+            pts = [
+                PontoHistorico(date(2026, 1, 2), 10.0),
+                PontoHistorico(date(2026, 1, 3), 12.0),
+            ]
+        else:
+            pts = [
+                PontoHistorico(date(2026, 1, 2), 20.0),
+                PontoHistorico(date(2026, 1, 3), 22.0),
+            ]
+        return Historico(ticker=ticker, pontos=pts, periodo=periodo, fonte="teste")
+
+    serie = serie_patrimonio_aprox(pos, periodo="1mo", fetch_hist=fake_hist)
+    assert serie.datas == [date(2026, 1, 2), date(2026, 1, 3)]
+    # dia1: 10*10 + 5*20 = 200; dia2: 10*12 + 5*22 = 230
+    assert serie.patrimonio[0] == pytest.approx(200)
+    assert serie.patrimonio[1] == pytest.approx(230)
+    assert serie.custo[0] == pytest.approx(200)
+    assert serie.var_periodo == pytest.approx(0.15)
+    assert serie.contribuicoes["AAA3"] == pytest.approx(20.0)  # 10*(12-10)
+    assert serie.contribuicoes["BBB3"] == pytest.approx(10.0)  # 5*(22-20)
 
 
 def test_posicoes_de_editor():
